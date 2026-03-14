@@ -1,0 +1,34 @@
+[workspace]
+members  = ["core", "api", "ingest"]
+resolver = "2"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = [
+    "postgres",
+    "runtime-tokio",
+    "json",
+    "chrono",
+    "uuid",
+    "macros",
+] }
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow    = "1"
+thiserror = "2"
+
+# Observability
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+uuid   = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+config = "0.14"

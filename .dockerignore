@@ -1,0 +1,35 @@
+# ── Rust ─────────────────────────────────────────────────────────────────────
+# Build artifacts — large, always rebuilt inside Docker
+target/
+
+# SQLx offline cache — not needed at runtime
+.sqlx/
+
+# ── Node / SvelteKit ─────────────────────────────────────────────────────────
+# Installed by `npm ci` inside the web-builder stage
+web/node_modules/
+
+# SvelteKit build cache and prior output
+web/.svelte-kit/
+web/dist/
+
+# ── Secrets & local config ───────────────────────────────────────────────────
+.env
+.env.*
+# Keep: .env.example (harmless reference)
+
+# ── VCS & IDE ─────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+
+# ── Docs & meta (not needed in the image) ────────────────────────────────────
+*.md
+LICENSE
+docker-compose.yml
+.dockerignore

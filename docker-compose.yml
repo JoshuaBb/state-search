@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       state_search
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d state_search"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
+      APP__SERVER__HOST:  0.0.0.0
+      APP__SERVER__PORT:  "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
+
+  ingest:
+    build: .
+    entrypoint: ["/app/ingest"]
+    command: ["reload"]
+    environment:
+      APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+

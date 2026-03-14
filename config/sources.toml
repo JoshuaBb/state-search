@@ -1,0 +1,13 @@
+[[ingest.sources]]
+name        = "co_public_drinking_water"
+description = "Colorado public drinking water quality"
+files       = ["data/usa/co/public_drinking_water/public_drinking_water_2026-03-14.csv"]
+
+[ingest.sources.field_map]
+# canonical_name = "source_csv_column"
+state_name = "state"
+fips_code  = "county_fips"
+year       = "year"
+quarter    = "quarter"
+latitude   = "pws_latitude"
+longitude  = "pws_longitude"
