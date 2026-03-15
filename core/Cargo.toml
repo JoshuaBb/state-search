@@ -14,3 +14,6 @@ tracing    = { workspace = true }
 uuid       = { workspace = true }
 chrono     = { workspace = true }
 config     = { workspace = true }
+toml       = "0.8"
+
+[dev-dependencies]
