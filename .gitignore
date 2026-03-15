@@ -42,3 +42,4 @@ Thumbs.db
 
 # Postgres data directory (bind-mounted from docker-compose)
 /pgdata/
+.worktrees/
