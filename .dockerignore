@@ -4,6 +4,7 @@ target/
 
 # SQLx offline cache — not needed at runtime
 .sqlx/
+/exports
 
 # ── Node / SvelteKit ─────────────────────────────────────────────────────────
 # Installed by `npm ci` inside the web-builder stage
