@@ -61,6 +61,32 @@ impl<'a> ObservationRepository<'a> {
         Ok(count)
     }
 
+    /// Bulk insert observations using an existing transaction (no internal begin/commit).
+    pub async fn bulk_create_with_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        observations: Vec<NewObservation>,
+    ) -> Result<u64> {
+        let mut count = 0u64;
+        for obs in observations {
+            sqlx::query(
+                "INSERT INTO fact_observations
+                     (raw_import_id, location_id, time_id, source_name, metric_name, metric_value, attributes)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(obs.raw_import_id)
+            .bind(obs.location_id)
+            .bind(obs.time_id)
+            .bind(obs.source_name)
+            .bind(obs.metric_name)
+            .bind(obs.metric_value)
+            .bind(obs.attributes)
+            .execute(&mut **tx)
+            .await?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
     pub async fn query(
         &self,
         metric_name: Option<&str>,

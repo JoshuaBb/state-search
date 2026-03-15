@@ -59,4 +59,31 @@ impl<'a> LocationRepository<'a> {
 
         Ok(rows)
     }
+
+    /// Upsert a location using an existing transaction.
+    pub async fn upsert_with_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        loc: NewLocation,
+    ) -> Result<i64> {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO dim_location (state_code, state_name, country, zip_code, fips_code, latitude, longitude)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (state_code, country, zip_code) DO UPDATE
+                 SET state_name = EXCLUDED.state_name,
+                     fips_code  = COALESCE(EXCLUDED.fips_code,  dim_location.fips_code),
+                     latitude   = COALESCE(EXCLUDED.latitude,   dim_location.latitude),
+                     longitude  = COALESCE(EXCLUDED.longitude,  dim_location.longitude)
+             RETURNING id",
+        )
+        .bind(loc.state_code)
+        .bind(loc.state_name)
+        .bind(loc.country)
+        .bind(loc.zip_code)
+        .bind(loc.fips_code)
+        .bind(loc.latitude)
+        .bind(loc.longitude)
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(id)
+    }
 }
