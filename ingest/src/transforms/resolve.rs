@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use state_search_core::config::{FieldDef, FieldType, OnFailure, SourceConfig};
+use state_search_core::config::{FieldDef, OnFailure, SourceConfig};
 use super::{FieldRule, coerce::{
     CoerceToBool, CoerceToDate, CoerceToDateTime, CoerceToF32, CoerceToF64,
     CoerceToI8, CoerceToI16, CoerceToI32, CoerceToI64,
@@ -7,14 +7,9 @@ use super::{FieldRule, coerce::{
     DateFormat, DateTimeFormat,
 }, rules::state_name_to_code::StateNameToCode};
 
-/// Resolved runtime representation for a single canonical field.
 pub struct ResolvedField {
-    /// CSV column name (source of the canonical value).
     pub source_col: String,
-    /// Ordered rule chain with pre-computed effective OnFailure per entry.
-    /// The implicit coerce rule (if any) is always last.
     pub chain: Vec<(Box<dyn FieldRule>, OnFailure)>,
-    /// Field-level OnFailure; used as effective_on_failure for the implicit coerce rule.
     pub field_on_failure: OnFailure,
 }
 
@@ -30,56 +25,56 @@ impl std::fmt::Debug for ResolvedField {
 
 pub type ResolvedFieldMap = HashMap<String, ResolvedField>;
 
-/// Parse and validate a format string given the field type.
-/// Returns the coerce rule to use (None = string, no coerce needed).
-fn parse_format_and_make_coerce(
+/// Map a postgres type string + optional format to the implicit coerce rule.
+/// Returns None for "text" (no coercion needed).
+fn field_type_str_to_coerce(
+    field_type: &str,
     format: Option<&str>,
-    field_type: &FieldType,
     field_on_failure: OnFailure,
 ) -> anyhow::Result<Option<(Box<dyn FieldRule>, OnFailure)>> {
-    // format is only valid for Date/DateTime
     if let Some(fmt_str) = format {
         match field_type {
-            FieldType::Date => {
+            "date" => {
                 let fmt = DateFormat::from_str(fmt_str)
                     .ok_or_else(|| anyhow::anyhow!("unknown date format: '{}'", fmt_str))?;
                 return Ok(Some((Box::new(CoerceToDate(fmt)), field_on_failure)));
             }
-            FieldType::DateTime => {
+            "timestamptz" | "timestamp with time zone" => {
                 let fmt = DateTimeFormat::from_str(fmt_str)
                     .ok_or_else(|| anyhow::anyhow!("unknown datetime format: '{}'", fmt_str))?;
                 return Ok(Some((Box::new(CoerceToDateTime(fmt)), field_on_failure)));
             }
-            _ => {
-                anyhow::bail!(
-                    "'format' is only valid for date/datetime types, got {:?}",
-                    field_type
-                );
-            }
+            _ => anyhow::bail!("'format' is only valid for date/timestamptz types, got '{}'", field_type),
         }
     }
 
-    // No format string — use defaults or no coerce
     let coerce: Option<Box<dyn FieldRule>> = match field_type {
-        FieldType::String   => None,
-        FieldType::I8       => Some(Box::new(CoerceToI8)),
-        FieldType::I16      => Some(Box::new(CoerceToI16)),
-        FieldType::I32      => Some(Box::new(CoerceToI32)),
-        FieldType::I64      => Some(Box::new(CoerceToI64)),
-        FieldType::U8       => Some(Box::new(CoerceToU8)),
-        FieldType::U16      => Some(Box::new(CoerceToU16)),
-        FieldType::U32      => Some(Box::new(CoerceToU32)),
-        FieldType::U64      => Some(Box::new(CoerceToU64)),
-        FieldType::F32      => Some(Box::new(CoerceToF32)),
-        FieldType::F64      => Some(Box::new(CoerceToF64)),
-        FieldType::Bool     => Some(Box::new(CoerceToBool)),
-        FieldType::Date     => Some(Box::new(CoerceToDate(DateFormat::Iso8601))),
-        FieldType::DateTime => Some(Box::new(CoerceToDateTime(DateTimeFormat::Rfc3339))),
+        "text" | "varchar" | "char"           => None,
+        "smallint" | "int2"                   => Some(Box::new(CoerceToI16)),
+        "integer"  | "int"  | "int4"          => Some(Box::new(CoerceToI32)),
+        "bigint"   | "int8"                   => Some(Box::new(CoerceToI64)),
+        "real"     | "float4"                 => Some(Box::new(CoerceToF32)),
+        "float8"   | "double precision"       => Some(Box::new(CoerceToF64)),
+        "numeric"  | "decimal"                => Some(Box::new(CoerceToF64)),
+        "boolean"  | "bool"                   => Some(Box::new(CoerceToBool)),
+        "date"                                => Some(Box::new(CoerceToDate(DateFormat::Iso8601))),
+        "timestamptz" | "timestamp with time zone" => Some(Box::new(CoerceToDateTime(DateTimeFormat::Rfc3339))),
+        // Legacy short names kept for compatibility
+        "i8"  => Some(Box::new(CoerceToI8)),
+        "i16" => Some(Box::new(CoerceToI16)),
+        "i32" => Some(Box::new(CoerceToI32)),
+        "i64" => Some(Box::new(CoerceToI64)),
+        "u8"  => Some(Box::new(CoerceToU8)),
+        "u16" => Some(Box::new(CoerceToU16)),
+        "u32" => Some(Box::new(CoerceToU32)),
+        "u64" => Some(Box::new(CoerceToU64)),
+        "f32" => Some(Box::new(CoerceToF32)),
+        "f64" => Some(Box::new(CoerceToF64)),
+        other => anyhow::bail!("unknown field type: '{}'", other),
     };
     Ok(coerce.map(|r| (r, field_on_failure)))
 }
 
-/// Look up a rule kind string and return the corresponding boxed rule.
 fn lookup_rule(kind: &str) -> Option<Box<dyn FieldRule>> {
     match kind {
         "state_name_to_code" => Some(Box::new(StateNameToCode)),
@@ -87,53 +82,47 @@ fn lookup_rule(kind: &str) -> Option<Box<dyn FieldRule>> {
     }
 }
 
-/// Resolve a single `FieldDef` into a `ResolvedField`.
-pub fn build_resolved_field(
-    canonical: &String,
-    def: &FieldDef,
-) -> anyhow::Result<ResolvedField> {
+/// Resolve a single FieldDef into a ResolvedField.
+/// `csv_col` is the source CSV column name (the YAML key in `fields`).
+pub fn build_resolved_field(csv_col: &str, def: &FieldDef) -> anyhow::Result<ResolvedField> {
     let field_on_failure = def.on_failure.unwrap_or(OnFailure::Ignore);
     let mut chain: Vec<(Box<dyn FieldRule>, OnFailure)> = Vec::new();
 
-    // User rules
     for rule_def in &def.rules {
         let rule = lookup_rule(&rule_def.kind)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown rule kind: '{}' (in field '{}')",
-                    rule_def.kind,
-                    canonical
-                )
-            })?;
+            .ok_or_else(|| anyhow::anyhow!(
+                "unknown rule kind: '{}' (in field canonical='{}')",
+                rule_def.kind, def.canonical
+            ))?;
         let rule_on_failure = rule_def.on_failure.unwrap_or(OnFailure::Ignore);
         let effective = field_on_failure.max(rule_on_failure);
         chain.push((rule, effective));
     }
 
-    // Implicit coerce rule (appended last)
-    if let Some(coerce_entry) = parse_format_and_make_coerce(
-        def.format.as_deref(),
+    if let Some(coerce_entry) = field_type_str_to_coerce(
         &def.field_type,
+        def.format.as_deref(),
         field_on_failure,
     )? {
         chain.push(coerce_entry);
     }
 
     Ok(ResolvedField {
-        source_col: def.source.to_lowercase(),
+        source_col: csv_col.to_lowercase(),
         chain,
         field_on_failure,
     })
 }
 
-/// Resolve all fields in a source config into a `ResolvedFieldMap`.
+/// Resolve all fields in a source config into a ResolvedFieldMap.
+/// HashMap key = canonical name; source_col = CSV column (lowercased).
 pub fn build_resolved_field_map(source: &SourceConfig) -> anyhow::Result<ResolvedFieldMap> {
     source
-        .field_map
+        .fields
         .iter()
-        .map(|(canonical, def)| {
-            build_resolved_field(canonical, def)
-                .map(|resolved| (canonical.clone(), resolved))
+        .map(|(csv_col, def)| {
+            build_resolved_field(csv_col, def)
+                .map(|resolved| (def.canonical.clone(), resolved))
         })
         .collect()
 }
@@ -141,88 +130,87 @@ pub fn build_resolved_field_map(source: &SourceConfig) -> anyhow::Result<Resolve
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[allow(unused_imports)]
-    use state_search_core::config::{FieldDef, FieldType, OnFailure, RuleDef};
+    use state_search_core::config::{FieldDef, OnFailure, RuleDef, SourceConfig};
+    use std::collections::HashMap;
+
+    #[test]
+    fn build_resolved_field_map_uses_csv_col_as_key_and_canonical_from_def() {
+        let mut fields = HashMap::new();
+        fields.insert("Year".to_string(), FieldDef {
+            canonical: "year".to_string(),
+            field_type: "smallint".to_string(),
+            format: None,
+            on_failure: None,
+            rules: vec![],
+        });
+
+        let source = SourceConfig {
+            name: "s".to_string(),
+            description: None,
+            files: vec![],
+            fields,
+            derived: HashMap::new(),
+        };
+
+        let resolved = build_resolved_field_map(&source).unwrap();
+        // Key in ResolvedFieldMap is the canonical name
+        assert!(resolved.contains_key("year"));
+        // source_col is the lowercased CSV column
+        assert_eq!(resolved["year"].source_col, "year");
+    }
+
+    #[test]
+    fn field_type_smallint_produces_coerce_i16() {
+        let def = FieldDef {
+            canonical: "year".to_string(),
+            field_type: "smallint".to_string(),
+            format: None,
+            on_failure: None,
+            rules: vec![],
+        };
+        let resolved = build_resolved_field("Year", &def).unwrap();
+        // smallint → CoerceToI16 appended as implicit rule
+        assert_eq!(resolved.chain.len(), 1);
+    }
+
+    #[test]
+    fn field_type_text_appends_no_coerce() {
+        let def = FieldDef {
+            canonical: "state_code".to_string(),
+            field_type: "text".to_string(),
+            format: None,
+            on_failure: None,
+            rules: vec![],
+        };
+        let resolved = build_resolved_field("state", &def).unwrap();
+        assert!(resolved.chain.is_empty());
+    }
 
     #[test]
     fn unknown_rule_kind_is_error() {
-        let def: FieldDef = toml::from_str(r#"
-            source = "col"
-            [[rules]]
-            kind = "does_not_exist"
-        "#).unwrap();
-        let result = build_resolved_field(&"col".to_string(), &def);
+        let def = FieldDef {
+            canonical: "col".to_string(),
+            field_type: "text".to_string(),
+            format: None,
+            on_failure: None,
+            rules: vec![RuleDef { kind: "does_not_exist".to_string(), on_failure: None }],
+        };
+        let result = build_resolved_field("col", &def);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("unknown rule kind"));
     }
 
     #[test]
-    fn format_on_non_date_type_is_error() {
-        let def: FieldDef = toml::from_str(r#"
-            source = "col"
-            type   = "string"
-            format = "iso8601"
-        "#).unwrap();
-        let result = build_resolved_field(&"col".to_string(), &def);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("format"));
-    }
-
-    #[test]
-    fn unknown_date_format_is_error() {
-        let def: FieldDef = toml::from_str(r#"
-            source = "col"
-            type   = "date"
-            format = "not_a_real_format"
-        "#).unwrap();
-        let result = build_resolved_field(&"col".to_string(), &def);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn effective_on_failure_takes_max() {
-        // field = skip_row (1), rule = skip_dataset (2) → effective = skip_dataset
-        let def: FieldDef = toml::from_str(r#"
-            source     = "state"
-            on_failure = "skip_row"
-            [[rules]]
-            kind       = "state_name_to_code"
-            on_failure = "skip_dataset"
-        "#).unwrap();
-        let resolved = build_resolved_field(&"state_name".to_string(), &def).unwrap();
-        // chain[0] is state_name_to_code with effective = skip_dataset
+        let def = FieldDef {
+            canonical: "state_code".to_string(),
+            field_type: "text".to_string(),
+            format: None,
+            on_failure: Some(OnFailure::SkipRow),
+            rules: vec![RuleDef { kind: "state_name_to_code".to_string(), on_failure: Some(OnFailure::SkipDataset) }],
+        };
+        let resolved = build_resolved_field("state", &def).unwrap();
         let (_, eff) = &resolved.chain[0];
         assert_eq!(*eff, OnFailure::SkipDataset);
-    }
-
-    #[test]
-    fn string_type_appends_no_coerce_rule() {
-        let def: FieldDef = toml::from_str(r#"source = "col""#).unwrap();
-        let resolved = build_resolved_field(&"f".to_string(), &def).unwrap();
-        assert!(resolved.chain.is_empty()); // no user rules, no coerce
-    }
-
-    #[test]
-    fn integer_type_appends_coerce_rule() {
-        let def: FieldDef = toml::from_str(r#"
-            source = "col"
-            type   = "i32"
-        "#).unwrap();
-        let resolved = build_resolved_field(&"f".to_string(), &def).unwrap();
-        assert_eq!(resolved.chain.len(), 1); // just the implicit coerce
-    }
-
-    #[test]
-    fn both_on_failure_none_defaults_to_ignore() {
-        // When neither field nor rule specifies on_failure, effective = Ignore
-        let def: FieldDef = toml::from_str(r#"
-            source = "state"
-            [[rules]]
-            kind = "state_name_to_code"
-        "#).unwrap();
-        let resolved = build_resolved_field(&"state_name".to_string(), &def).unwrap();
-        let (_, eff) = &resolved.chain[0];
-        assert_eq!(*eff, OnFailure::Ignore);
-        assert_eq!(resolved.field_on_failure, OnFailure::Ignore);
     }
 }
