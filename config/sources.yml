@@ -1,0 +1,32 @@
+# config/sources.yml
+sources:
+  - name: co_public_drinking_water
+    description: Colorado public drinking water quality
+    files:
+      - data/usa/co/public_drinking_water/public_drinking_water_2026-03-14.csv
+
+    fields:
+      state:
+        canonical: state_code
+        type: text
+        on_failure: skip_row
+        rules:
+          - kind: state_name_to_code
+            on_failure: skip_dataset
+      county_fips:
+        canonical: fips_code
+        type: text
+      year:
+        canonical: year
+        type: smallint
+      quarter:
+        canonical: quarter
+        type: smallint
+      pws_latitude:
+        canonical: latitude
+        type: float8
+      pws_longitude:
+        canonical: longitude
+        type: float8
+
+    derived: {}
