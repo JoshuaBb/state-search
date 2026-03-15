@@ -1,4 +1,6 @@
+mod context;
 mod dimensions;
+mod export;
 mod observations;
 mod record;
 mod row;
@@ -17,6 +19,7 @@ use uuid::Uuid;
 
 use crate::transforms::resolve::{build_resolved_field_map, ResolvedFieldMap};
 use self::dimensions::{new_location_cache, LocationCache};
+use self::export::generate_export_sql;
 use self::record::process_record;
 use self::row::infer_country_from_path;
 
@@ -27,6 +30,9 @@ const ROW_CONCURRENCY: usize = 8;
 /// Observations are buffered across rows and flushed to the DB in this batch size.
 /// Larger batches reduce round-trips; 500 is a reasonable default.
 const OBS_BATCH_SIZE: usize = 500;
+
+/// Base directory for Parquet export scripts.
+const EXPORT_BASE: &str = "exports";
 
 /// Error type for pipeline-level failures.
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +99,7 @@ impl<'a> IngestPipeline<'a> {
                     %ingest_run_id, observations = total,
                     "ingest complete"
                 );
+                self.write_export_script(source, ingest_run_id);
                 Ok(total)
             }
             Err(e) => {
@@ -107,6 +114,48 @@ impl<'a> IngestPipeline<'a> {
                 }
                 Err(e)
             }
+        }
+    }
+
+    /// Write a DuckDB-executable SQL export script to disk.
+    ///
+    /// The script is scoped to this `ingest_run_id` and joins dimensions + context
+    /// before writing Parquet. Export failure is logged but does not fail the ingest —
+    /// the Postgres data is already committed and the script can be re-generated or
+    /// re-executed at any time against the same `ingest_run_id`.
+    fn write_export_script(&self, source: &SourceConfig, ingest_run_id: Uuid) {
+        let source_name = source.name.as_str();
+
+        // Read the Postgres connection string from the DB pool.
+        // We use a placeholder if the pool options are not directly accessible;
+        // operators can edit the script or set via config.
+        let pg_connection = "host=localhost dbname=state_search";
+
+        let sql = generate_export_sql(
+            source_name,
+            ingest_run_id,
+            &source.attributes,
+            pg_connection,
+            EXPORT_BASE,
+        );
+
+        let dir = format!("{EXPORT_BASE}/{source_name}");
+        let path = format!("{dir}/export_{ingest_run_id}.sql");
+
+        if let Err(e) = std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::write(&path, sql))
+        {
+            warn!(
+                source = source_name, %ingest_run_id,
+                error = %e,
+                "failed to write export script — Parquet export will need to be triggered manually"
+            );
+        } else {
+            info!(
+                source = source_name, %ingest_run_id,
+                path = path,
+                "export script written — run with: duckdb -c \".read {path}\""
+            );
         }
     }
 

@@ -45,6 +45,7 @@ pub(super) fn build_observations(
     metrics: Vec<(String, Option<f64>)>,
     location_id: Option<i64>,
     time_id: Option<i64>,
+    context_id: Option<i64>,
     source_name: &str,
     ingest_run_id: Uuid,
 ) -> Vec<NewObservation> {
@@ -58,6 +59,7 @@ pub(super) fn build_observations(
             metric_name: name,
             metric_value: value,
             attributes: None,
+            context_id,
             ingest_run_id,
         })
         .collect()
@@ -76,6 +78,7 @@ mod tests {
             vec![("metric_a".to_string(), Some(1.0)), ("metric_b".to_string(), None)],
             Some(10),
             Some(20),
+            Some(99),
             "src",
             id,
         );

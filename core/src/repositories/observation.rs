@@ -51,6 +51,7 @@ impl<'a> ObservationRepository<'a> {
         let mut metric_names    = Vec::with_capacity(len);
         let mut metric_values   = Vec::with_capacity(len);
         let mut attributes_list = Vec::with_capacity(len);
+        let mut context_ids     = Vec::with_capacity(len);
         let mut ingest_run_ids  = Vec::with_capacity(len);
 
         for obs in observations {
@@ -61,15 +62,16 @@ impl<'a> ObservationRepository<'a> {
             metric_names   .push(obs.metric_name);
             metric_values  .push(obs.metric_value);
             attributes_list.push(obs.attributes);
+            context_ids    .push(obs.context_id);
             ingest_run_ids .push(obs.ingest_run_id);
         }
 
         sqlx::query(
             "INSERT INTO fact_observations
-                 (raw_import_id, location_id, time_id, source_name, metric_name, metric_value, attributes, ingest_run_id)
+                 (raw_import_id, location_id, time_id, source_name, metric_name, metric_value, attributes, context_id, ingest_run_id)
              SELECT * FROM UNNEST(
                  $1::bigint[], $2::bigint[], $3::bigint[], $4::text[],
-                 $5::text[], $6::float8[], $7::jsonb[], $8::uuid[]
+                 $5::text[], $6::float8[], $7::jsonb[], $8::bigint[], $9::uuid[]
              )",
         )
         .bind(&raw_import_ids)
@@ -79,6 +81,7 @@ impl<'a> ObservationRepository<'a> {
         .bind(&metric_names)
         .bind(&metric_values)
         .bind(&attributes_list)
+        .bind(&context_ids)
         .bind(&ingest_run_ids)
         .execute(self.pool)
         .await?;
@@ -149,6 +152,7 @@ mod tests {
             metric_name:   "m".to_string(),
             metric_value:  None,
             attributes:    None,
+            context_id:    None,
             ingest_run_id: Uuid::new_v4(),
         };
     }

@@ -16,6 +16,7 @@ pub struct Observation {
     pub metric_value:  Option<f64>,
     /// Any additional fields that don't fit the normalized columns.
     pub attributes:    Option<Value>,
+    pub context_id:    Option<i64>,
     pub ingest_run_id: Option<Uuid>,
     pub inserted_at:   DateTime<Utc>,
 }
@@ -29,6 +30,7 @@ pub struct NewObservation {
     pub metric_name:   String,
     pub metric_value:  Option<f64>,
     pub attributes:    Option<Value>,
+    pub context_id:    Option<i64>,
     pub ingest_run_id: Uuid,
 }
 
@@ -48,6 +50,7 @@ mod tests {
             metric_name:   "test".to_string(),
             metric_value:  None,
             attributes:    None,
+            context_id:    None,
             ingest_run_id: Uuid::new_v4(),
         };
     }

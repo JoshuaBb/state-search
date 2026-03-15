@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use state_search_core::{
     config::OnFailure,
-    models::observation::NewObservation,
+    models::{observation::NewObservation, row_context::NewRowContext},
+    repositories::row_context::RowContextRepository,
     Db,
 };
 use tracing::{debug, warn};
@@ -11,6 +12,7 @@ use uuid::Uuid;
 use crate::transforms::{chain::apply_chain, resolve::ResolvedFieldMap, FieldValue};
 use super::{
     IngestError,
+    context::extract_context,
     dimensions::{resolve_location_id, resolve_time_id, LocationCache},
     observations::{build_observations, extract_metrics},
     row::{canonical_to_json, row_to_canonical},
@@ -58,9 +60,12 @@ pub(super) async fn process_record(
         RowOutcome::Abort(e)   => return Err(e),
     };
 
-    let (location_id, time_id) = tokio::join!(
+    let context_attrs = extract_context(&transformed);
+
+    let (location_id, time_id, context_id) = tokio::join!(
         resolve_location_id(&transformed, default_country, db, row_num, location_cache),
         resolve_time_id(&transformed, db, row_num),
+        insert_context(source_name, context_attrs, db, row_num),
     );
 
     let metrics = extract_metrics(&transformed);
@@ -68,9 +73,32 @@ pub(super) async fn process_record(
         warn!(row = row_num, "no metric fields found");
     }
 
-    let obs = build_observations(metrics, location_id, time_id, source_name, ingest_run_id);
+    let obs = build_observations(metrics, location_id, time_id, context_id, source_name, ingest_run_id);
     debug!(row = row_num, produced = obs.len(), "row ready");
     Ok(obs)
+}
+
+// ── Context helpers ────────────────────────────────────────────────────────────
+
+/// Insert a `fact_row_context` row and return its id, following the same pattern
+/// as dimension upserts (produces an id required to build `NewObservation`).
+async fn insert_context(
+    source_name: &str,
+    attributes: serde_json::Value,
+    db: &Db,
+    row_num: u64,
+) -> Option<i64> {
+    let ctx = NewRowContext {
+        source_name: source_name.to_string(),
+        attributes,
+    };
+    match RowContextRepository::new(db).create(ctx).await {
+        Ok(id) => Some(id),
+        Err(e) => {
+            warn!(row = row_num, error = %e, "failed to insert row context — observations will have null context_id");
+            None
+        }
+    }
 }
 
 // ── Transform helpers ─────────────────────────────────────────────────────────

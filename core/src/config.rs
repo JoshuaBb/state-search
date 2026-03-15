@@ -102,6 +102,11 @@ pub struct SourceConfig {
     pub files: Vec<String>,
     #[serde(default)]
     pub field_map: HashMap<String, FieldDef>,
+    /// Keys from `attributes` JSONB to flatten into named columns at export time.
+    /// Not used during ingest — all non-numeric, non-dimension fields are stored
+    /// automatically. Only needed by the post-ingest Parquet export step.
+    #[serde(default)]
+    pub attributes: Vec<String>,
 }
 
 fn default_pool_size() -> u32 { 10 }
