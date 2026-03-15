@@ -36,34 +36,54 @@ impl<'a> ObservationRepository<'a> {
         Ok(row)
     }
 
-    /// Bulk insert observations. Wraps all rows for a single CSV row in one
-    /// mini-transaction (per-row granularity, not per-file).
-    /// Insert observations individually with no transaction — each row commits immediately.
-    /// Partial progress is preserved on failure and cleaned up via `delete_by_ingest_run`.
+    /// Bulk insert observations using a single UNNEST query — one round-trip
+    /// regardless of how many observations are in the batch.
     pub async fn bulk_create(&self, observations: Vec<NewObservation>) -> Result<u64> {
-        let mut count = 0u64;
-
-        for obs in observations {
-            sqlx::query(
-                "INSERT INTO fact_observations
-                     (raw_import_id, location_id, time_id, source_name, metric_name, metric_value, attributes, ingest_run_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            )
-            .bind(obs.raw_import_id)
-            .bind(obs.location_id)
-            .bind(obs.time_id)
-            .bind(obs.source_name)
-            .bind(obs.metric_name)
-            .bind(obs.metric_value)
-            .bind(obs.attributes)
-            .bind(obs.ingest_run_id)
-            .execute(self.pool)
-            .await?;
-
-            count += 1;
+        if observations.is_empty() {
+            return Ok(0);
         }
 
-        Ok(count)
+        let len = observations.len();
+        let mut raw_import_ids  = Vec::with_capacity(len);
+        let mut location_ids    = Vec::with_capacity(len);
+        let mut time_ids        = Vec::with_capacity(len);
+        let mut source_names    = Vec::with_capacity(len);
+        let mut metric_names    = Vec::with_capacity(len);
+        let mut metric_values   = Vec::with_capacity(len);
+        let mut attributes_list = Vec::with_capacity(len);
+        let mut ingest_run_ids  = Vec::with_capacity(len);
+
+        for obs in observations {
+            raw_import_ids .push(obs.raw_import_id);
+            location_ids   .push(obs.location_id);
+            time_ids       .push(obs.time_id);
+            source_names   .push(obs.source_name);
+            metric_names   .push(obs.metric_name);
+            metric_values  .push(obs.metric_value);
+            attributes_list.push(obs.attributes);
+            ingest_run_ids .push(obs.ingest_run_id);
+        }
+
+        sqlx::query(
+            "INSERT INTO fact_observations
+                 (raw_import_id, location_id, time_id, source_name, metric_name, metric_value, attributes, ingest_run_id)
+             SELECT * FROM UNNEST(
+                 $1::bigint[], $2::bigint[], $3::bigint[], $4::text[],
+                 $5::text[], $6::float8[], $7::jsonb[], $8::uuid[]
+             )",
+        )
+        .bind(&raw_import_ids)
+        .bind(&location_ids)
+        .bind(&time_ids)
+        .bind(&source_names)
+        .bind(&metric_names)
+        .bind(&metric_values)
+        .bind(&attributes_list)
+        .bind(&ingest_run_ids)
+        .execute(self.pool)
+        .await?;
+
+        Ok(len as u64)
     }
 
     /// Delete all observations belonging to a given ingest run.

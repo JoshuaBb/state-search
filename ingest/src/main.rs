@@ -1,4 +1,5 @@
 mod pipeline;
+mod stream;
 mod transforms;
 
 use clap::{Parser, Subcommand};

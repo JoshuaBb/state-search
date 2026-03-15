@@ -31,4 +31,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Utilities
 uuid   = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-config = "0.14"
+config  = "0.14"
+futures = "0.3"
