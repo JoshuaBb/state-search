@@ -1,0 +1,65 @@
+# config/sources.example.toml
+#
+# Copy this file to config/sources.toml and edit it to configure your data sources.
+# The ingest CLI reads sources.toml at startup — no database registration step needed.
+#
+# Each [[ingest.sources]] block defines one CSV data source.
+# Multiple sources can be defined in the same file.
+
+# ── Example 1: State-level annual data ───────────────────────────────────────
+
+[[ingest.sources]]
+# name: unique identifier used in CLI commands and stored in the DB.
+# Use lowercase with underscores. Must be unique across all sources.
+name = "unemployment"
+
+# description: optional human-readable label shown in the UI source list.
+description = "BLS state unemployment rates by year"
+
+# files: list of CSV file paths to ingest for this source.
+# Paths are relative to the working directory (project root when running locally,
+# /app when running in Docker — data/ is mounted at /app/data).
+# Files already present in raw_imports are automatically skipped on re-run.
+files = [
+  "data/unemployment/bls_2022.csv",
+  "data/unemployment/bls_2023.csv",
+]
+
+[ingest.sources.field_map]
+# field_map maps canonical field names (keys) to CSV column headers (values).
+#
+# canonical_name = "CSV_column_header"
+#
+# Location canonical names (all optional — provide whichever columns you have):
+#   county     — county or region name
+#   country    — country code (defaults to USA if omitted)
+#   zip_code   — ZIP / postal code
+#   fips_code  — FIPS numeric code
+#   latitude   — decimal latitude
+#   longitude  — decimal longitude
+#
+# Time canonical names (year is required if providing any time fields):
+#   year       — year (required)
+#   quarter    — quarter 1–4 (optional)
+#   month      — month 1–12 (optional)
+#   day        — day of month (optional)
+#
+# Any CSV column NOT listed here and NOT already a canonical name passes through
+# unchanged and is stored as a metric field in normalized_data.
+state_name = "State"
+year       = "Year"
+
+# ── Example 2: Sub-annual county-level data ───────────────────────────────────
+
+[[ingest.sources]]
+name        = "housing_permits"
+description = "Census Bureau monthly housing permit data by county"
+files       = ["data/housing/permits_2023.csv"]
+
+[ingest.sources.field_map]
+county    = "County_Name"
+fips_code = "FIPS"
+year      = "Year"
+month     = "Month"
+# "Permits_Issued" and "Permit_Value_USD" are not listed here,
+# so they will be stored as metric fields in normalized_data automatically.
