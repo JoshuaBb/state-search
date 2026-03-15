@@ -3,11 +3,29 @@ name        = "co_public_drinking_water"
 description = "Colorado public drinking water quality"
 files       = ["data/usa/co/public_drinking_water/public_drinking_water_2026-03-14.csv"]
 
-[ingest.sources.field_map]
-# canonical_name = "source_csv_column"
-state_name = "state"
-fips_code  = "county_fips"
-year       = "year"
-quarter    = "quarter"
-latitude   = "pws_latitude"
-longitude  = "pws_longitude"
+[ingest.sources.field_map.state_name]
+source     = "state"
+on_failure = "skip_row"
+
+[[ingest.sources.field_map.state_name.rules]]
+kind       = "state_name_to_code"
+on_failure = "skip_dataset"
+
+[ingest.sources.field_map.fips_code]
+source = "county_fips"
+
+[ingest.sources.field_map.year]
+source = "year"
+type   = "i16"
+
+[ingest.sources.field_map.quarter]
+source = "quarter"
+type   = "i16"
+
+[ingest.sources.field_map.latitude]
+source = "pws_latitude"
+type   = "f64"
+
+[ingest.sources.field_map.longitude]
+source = "pws_longitude"
+type   = "f64"
