@@ -20,3 +20,6 @@ tracing-subscriber = { workspace = true }
 
 csv     = "1"
 clap    = { version = "4", features = ["derive"] }
+phf       = { version = "0.11", features = ["macros"] }
+chrono    = { workspace = true }
+thiserror = { workspace = true }

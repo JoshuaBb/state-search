@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use serde_json::{Map, Value};
 use state_search_core::{
-    config::SourceConfig,
+    config::{FieldDef, SourceConfig},
     models::{
         location::NewLocation,
         observation::NewObservation,
@@ -202,10 +202,10 @@ fn row_to_json(headers: &[String], record: &csv::StringRecord) -> Value {
 }
 
 /// Invert canonical_name→source_col map to produce source_col→canonical_name.
-fn build_field_map(field_map: &HashMap<String, String>) -> HashMap<String, String> {
+fn build_field_map(field_map: &HashMap<String, FieldDef>) -> HashMap<String, String> {
     field_map
         .iter()
-        .map(|(canonical, src_col)| (src_col.clone(), canonical.clone()))
+        .map(|(canonical, field_def)| (field_def.source.clone(), canonical.clone()))
         .collect()
 }
 

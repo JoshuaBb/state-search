@@ -1,4 +1,5 @@
 mod pipeline;
+mod transforms;
 
 use clap::{Parser, Subcommand};
 use state_search_core::{config::AppConfig, db};
