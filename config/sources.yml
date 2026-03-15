@@ -28,5 +28,36 @@ sources:
       pws_longitude:
         canonical: longitude
         type: float8
+      analyte_name:
+        canonical: analyte_name
+        type: text
+        on_failure: skip_row
+      time_period:
+        canonical: time_period
+        type: text
+      average_concentration:
+        canonical: average_concentration
+        type: float8
+      maximum_concentration:
+        canonical: maximum_concentration
+        type: float8
+      sdwa_limit:
+        canonical: sdwa_limit
+        type: float8
+      units:
+        canonical: units
+        type: text
+      pws_id_number:
+        canonical: pws_id_number
+        type: text
+      pws_name:
+        canonical: pws_name
+        type: text
+      pws_primary_source_code:
+        canonical: pws_primary_source_code
+        type: text
+      pws_population_served:
+        canonical: pws_population_served
+        type: integer
 
     derived: {}

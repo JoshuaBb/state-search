@@ -11,6 +11,23 @@ fn is_dimension_field(name: &str) -> bool {
     LOCATION_FIELDS.contains(&name) || TIME_FIELDS.contains(&name)
 }
 
+/// Map a Postgres field_type string to a DuckDB cast suffix.
+/// Returns an empty string for text (no cast needed).
+fn duckdb_cast(field_type: &str) -> &'static str {
+    match field_type {
+        "smallint"                     => "::SMALLINT",
+        "integer" | "int"              => "::INTEGER",
+        "bigint"                       => "::BIGINT",
+        "real" | "float4"              => "::REAL",
+        "float8" | "double precision"  => "::DOUBLE",
+        "numeric"                      => "::DOUBLE",
+        "boolean"                      => "::BOOLEAN",
+        "date"                         => "::DATE",
+        "timestamptz"                  => "::TIMESTAMPTZ",
+        _                              => "",   // text — no cast
+    }
+}
+
 /// Generate a DuckDB SQL script that exports normalized_imports for a completed
 /// ingest run to partitioned Parquet files.
 pub(super) fn generate_export_sql(
@@ -21,15 +38,16 @@ pub(super) fn generate_export_sql(
     pg_connection: &str,
     export_base: &str,
 ) -> String {
-    // Project all non-dimension fields from normalized_data
+    // Project all non-dimension fields from normalized_data, casting to native types
     let mut projections: Vec<String> = Vec::new();
-    for field_name in schema.keys() {
+    for (field_name, field_type) in schema {
         if is_dimension_field(field_name) {
             continue;
         }
+        let cast = duckdb_cast(field_type);
         projections.push(format!(
-            "        (n.normalized_data->>'{}') AS {}",
-            field_name, field_name
+            "        (n.normalized_data->>'{}'){} AS {}",
+            field_name, cast, field_name
         ));
     }
 
@@ -94,9 +112,10 @@ mod tests {
         assert!(!sql.contains("fact_observations"));
         assert!(!sql.contains("fact_row_context"));
         assert!(sql.contains(&id.to_string()));
-        // non-dim fields are projected from normalized_data
-        assert!(sql.contains("normalized_data->>'analyte_name'"));
-        assert!(sql.contains("normalized_data->>'average_value'"));
+        // text fields: no cast
+        assert!(sql.contains("normalized_data->>'analyte_name') AS analyte_name"));
+        // numeric fields: cast to DOUBLE
+        assert!(sql.contains("normalized_data->>'average_value')::DOUBLE AS average_value"));
         // dimension fields come from dim joins, not normalized_data
         assert!(!sql.contains("normalized_data->>'year'"));
         assert!(!sql.contains("normalized_data->>'state_code'"));
