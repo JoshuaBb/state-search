@@ -97,7 +97,7 @@ impl<'a> IngestPipeline<'a> {
         match result {
             Ok(total) => {
                 info!(source = source_name, file = file_path, %ingest_run_id, rows = total, "ingest complete");
-                self.write_export_script(source, ingest_run_id);
+                self.write_export_script(source, ingest_run_id, &schema, &derived_fields);
                 Ok(total)
             }
             Err(e) => {
@@ -112,13 +112,17 @@ impl<'a> IngestPipeline<'a> {
         }
     }
 
-    fn write_export_script(&self, source: &SourceConfig, ingest_run_id: Uuid) {
+    fn write_export_script(
+        &self,
+        source: &SourceConfig,
+        ingest_run_id: Uuid,
+        schema: &HashMap<String, String>,
+        derived_fields: &HashMap<String, String>,
+    ) {
         let source_name = source.name.as_str();
         let pg_connection = "host=localhost dbname=state_search";
 
-        // NOTE: export.rs still uses the old signature (Task 12 will update it).
-        // Pass &[] until generate_export_sql is updated to accept schema/derived_fields.
-        let sql = generate_export_sql(source_name, ingest_run_id, &[], pg_connection, EXPORT_BASE);
+        let sql = generate_export_sql(source_name, ingest_run_id, schema, derived_fields, pg_connection, EXPORT_BASE);
 
         let dir = format!("{EXPORT_BASE}/{source_name}");
         let path = format!("{dir}/export_{ingest_run_id}.sql");
