@@ -8,7 +8,7 @@ pub trait FieldRule: private::Sealed + Send + Sync {
     fn apply(&self, value: FieldValue) -> RuleOutcome;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FieldValue {
     Null,
     Str(String),

@@ -106,7 +106,7 @@ impl<'a> IngestPipeline<'a> {
                 for (canonical, resolved_field) in &resolved {
                     let raw_val = raw
                         .get(resolved_field.source_col.as_str())
-                        .map(field_value_clone)
+                        .map(|v| v.clone())
                         .unwrap_or(FieldValue::Null);
 
                     match apply_chain(raw_val, &resolved_field.chain) {
@@ -145,7 +145,7 @@ impl<'a> IngestPipeline<'a> {
                 // Pass through unmapped columns (preserve existing metric-extraction behavior)
                 for (col, val) in &raw {
                     if !resolved.values().any(|r| r.source_col == *col) {
-                        transformed.insert(col.clone(), field_value_clone(val));
+                        transformed.insert(col.clone(), val.clone());
                     }
                 }
 
@@ -229,27 +229,6 @@ fn row_to_canonical(headers: &[String], record: &csv::StringRecord) -> HashMap<S
             (header.clone(), val)
         })
         .collect()
-}
-
-/// Shallow clone of a FieldValue for passing through unmapped columns.
-fn field_value_clone(v: &FieldValue) -> FieldValue {
-    match v {
-        FieldValue::Null        => FieldValue::Null,
-        FieldValue::Str(s)      => FieldValue::Str(s.clone()),
-        FieldValue::I8(x)       => FieldValue::I8(*x),
-        FieldValue::I16(x)      => FieldValue::I16(*x),
-        FieldValue::I32(x)      => FieldValue::I32(*x),
-        FieldValue::I64(x)      => FieldValue::I64(*x),
-        FieldValue::U8(x)       => FieldValue::U8(*x),
-        FieldValue::U16(x)      => FieldValue::U16(*x),
-        FieldValue::U32(x)      => FieldValue::U32(*x),
-        FieldValue::U64(x)      => FieldValue::U64(*x),
-        FieldValue::F32(x)      => FieldValue::F32(*x),
-        FieldValue::F64(x)      => FieldValue::F64(*x),
-        FieldValue::Bool(x)     => FieldValue::Bool(*x),
-        FieldValue::Date(x)     => FieldValue::Date(*x),
-        FieldValue::DateTime(x) => FieldValue::DateTime(*x),
-    }
 }
 
 /// Serialize the canonical FieldValue map to JSON for raw_imports storage.
