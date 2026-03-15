@@ -80,6 +80,7 @@ impl<'a> IngestPipeline<'a> {
         debug!(source = source_name, ?headers, "CSV headers detected");
 
         let default_country = infer_country_from_path(file_path);
+        let total_rows = count_csv_data_rows(file_path).ok();
 
         let mut total = 0u64;
         let mut row_num = 0u64;
@@ -91,6 +92,7 @@ impl<'a> IngestPipeline<'a> {
             &resolved,
             &headers,
             default_country.as_deref(),
+            total_rows,
             &mut reader,
             &mut total,
             &mut row_num,
@@ -144,6 +146,7 @@ impl<'a> IngestPipeline<'a> {
         resolved: &ResolvedFieldMap,
         headers: &[String],
         default_country: Option<&str>,
+        total_rows: Option<u64>,
         reader: &mut csv::Reader<std::fs::File>,
         total: &mut u64,
         row_num: &mut u64,
@@ -260,13 +263,26 @@ impl<'a> IngestPipeline<'a> {
             *total += count;
 
             if *row_num % 1000 == 0 {
-                info!(
-                    source = source_name,
-                    file = file_path,
-                    rows = row_num,
-                    observations = total,
-                    "ingest progress"
-                );
+                let pct = total_rows
+                    .filter(|&n| n > 0)
+                    .map(|n| (*row_num * 100) / n);
+                match pct {
+                    Some(p) => info!(
+                        source = source_name,
+                        file = file_path,
+                        rows = row_num,
+                        observations = total,
+                        progress_pct = p,
+                        "ingest progress"
+                    ),
+                    None => info!(
+                        source = source_name,
+                        file = file_path,
+                        rows = row_num,
+                        observations = total,
+                        "ingest progress"
+                    ),
+                }
             }
         }
 
@@ -404,6 +420,15 @@ fn extract_metrics(map: &HashMap<String, FieldValue>) -> Vec<(String, Option<f64
             (k.clone(), num)
         })
         .collect()
+}
+
+/// Count data rows in a CSV file (total lines minus the header line).
+/// Used to compute progress percentage. Returns `Err` if the file can't be read.
+fn count_csv_data_rows(file_path: &str) -> anyhow::Result<u64> {
+    use std::io::{BufRead, BufReader};
+    let f = std::fs::File::open(file_path)?;
+    let count = BufReader::new(f).lines().count().saturating_sub(1) as u64;
+    Ok(count)
 }
 
 fn infer_country_from_path(file_path: &str) -> Option<String> {

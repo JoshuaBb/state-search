@@ -38,8 +38,9 @@ impl<'a> ObservationRepository<'a> {
 
     /// Bulk insert observations. Wraps all rows for a single CSV row in one
     /// mini-transaction (per-row granularity, not per-file).
+    /// Insert observations individually with no transaction — each row commits immediately.
+    /// Partial progress is preserved on failure and cleaned up via `delete_by_ingest_run`.
     pub async fn bulk_create(&self, observations: Vec<NewObservation>) -> Result<u64> {
-        let mut tx = self.pool.begin().await?;
         let mut count = 0u64;
 
         for obs in observations {
@@ -56,13 +57,12 @@ impl<'a> ObservationRepository<'a> {
             .bind(obs.metric_value)
             .bind(obs.attributes)
             .bind(obs.ingest_run_id)
-            .execute(&mut *tx)
+            .execute(self.pool)
             .await?;
 
             count += 1;
         }
 
-        tx.commit().await?;
         Ok(count)
     }
 
