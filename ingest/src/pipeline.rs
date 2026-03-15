@@ -25,7 +25,7 @@ use crate::transforms::{
 };
 
 const LOCATION_FIELDS: &[&str] = &[
-    "state_code", "state_name", "country", "zip_code", "fips_code", "latitude", "longitude",
+    "county", "country", "zip_code", "fips_code", "latitude", "longitude",
 ];
 const TIME_FIELDS: &[&str] = &["year", "quarter", "month", "day"];
 
@@ -45,6 +45,17 @@ impl<'a> IngestPipeline<'a> {
         Self { db }
     }
 
+    /// Returns true if this file has already been ingested (has rows in raw_imports).
+    pub async fn already_ingested(&self, file_path: &str) -> anyhow::Result<bool> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM raw_imports WHERE source_file = $1)",
+        )
+        .bind(file_path)
+        .fetch_one(self.db)
+        .await?;
+        Ok(exists)
+    }
+
     pub async fn run(&self, source: &SourceConfig, file_path: &str) -> anyhow::Result<u64> {
         let source_name = source.name.as_str();
         info!(source = source_name, file = file_path, "starting ingest");
@@ -61,21 +72,9 @@ impl<'a> IngestPipeline<'a> {
 
         let default_country = infer_country_from_path(file_path);
 
-        // Skip-check runs BEFORE the transaction (outside BEGIN)
-        let already_ingested: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM raw_imports WHERE source_file = $1)",
-        )
-        .bind(file_path)
-        .fetch_one(self.db)
-        .await?;
-
-        if already_ingested {
-            info!(source = source_name, file = file_path, "skipping (already ingested)");
-            return Ok(0);
-        }
-
         // Open transaction for the entire file
         let mut tx = self.db.begin().await?;
+        let db = self.db; // pool for dimension upserts (outside the file transaction)
         let mut total = 0u64;
         let mut row_num = 0u64;
 
@@ -149,10 +148,12 @@ impl<'a> IngestPipeline<'a> {
                     }
                 }
 
-                // 4. Resolve dimensions — all DB calls use &mut tx to stay in the file transaction
+                // 4. Resolve dimensions using the pool (not the file transaction).
+                // Dimensions are shared global state; a constraint violation on one row
+                // must not abort the transaction and kill the rest of the file.
                 let location_id = match resolve_location(&transformed, default_country.as_deref()) {
                     Ok(loc) => {
-                        match LocationRepository::upsert_with_tx(&mut tx, loc).await {
+                        match LocationRepository::new(db).upsert(loc).await {
                             Ok(id) => { debug!(row = row_num, location_id = id, "resolved location"); Some(id) }
                             Err(e) => { warn!(row = row_num, error = %e, "could not resolve location"); None }
                         }
@@ -162,7 +163,7 @@ impl<'a> IngestPipeline<'a> {
 
                 let time_id = match resolve_time(&transformed) {
                     Ok(t) => {
-                        match TimeRepository::upsert_with_tx(&mut tx, t).await {
+                        match TimeRepository::new(db).upsert(t).await {
                             Ok(id) => { debug!(row = row_num, time_id = id, "resolved time"); Some(id) }
                             Err(e) => { warn!(row = row_num, error = %e, "could not resolve time"); None }
                         }
@@ -193,6 +194,10 @@ impl<'a> IngestPipeline<'a> {
                 let count = ObservationRepository::bulk_create_with_tx(&mut tx, observations).await?;
                 debug!(row = row_num, inserted = count, "row complete");
                 total += count;
+
+                if row_num % 1000 == 0 {
+                    info!(source = source_name, file = file_path, rows = row_num, observations = total, "ingest progress");
+                }
             }
             Ok(total)
         }
@@ -215,6 +220,7 @@ impl<'a> IngestPipeline<'a> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Parse CSV row into canonical FieldValue map: trim all strings, empty → Null.
+/// Header keys are lowercased so matching against `sources.toml` source values is case-insensitive.
 fn row_to_canonical(headers: &[String], record: &csv::StringRecord) -> HashMap<String, FieldValue> {
     headers
         .iter()
@@ -226,7 +232,7 @@ fn row_to_canonical(headers: &[String], record: &csv::StringRecord) -> HashMap<S
             } else {
                 FieldValue::Str(trimmed.to_string())
             };
-            (header.clone(), val)
+            (header.to_lowercase(), val)
         })
         .collect()
 }
@@ -293,13 +299,12 @@ fn resolve_location(
     default_country: Option<&str>,
 ) -> core::result::Result<NewLocation, ()> {
     let loc = NewLocation {
-        state_code: str_from_field(map, "state_code"),
-        state_name: str_from_field(map, "state_name"),
-        country:    str_from_field(map, "country").or_else(|| default_country.map(str::to_string)),
-        zip_code:   str_from_field(map, "zip_code"),
-        fips_code:  str_from_field(map, "fips_code"),
-        latitude:   f64_from_field(map, "latitude"),
-        longitude:  f64_from_field(map, "longitude"),
+        county:    str_from_field(map, "county"),
+        country:   str_from_field(map, "country").or_else(|| default_country.map(str::to_string)),
+        zip_code:  str_from_field(map, "zip_code"),
+        fips_code: str_from_field(map, "fips_code"),
+        latitude:  f64_from_field(map, "latitude"),
+        longitude: f64_from_field(map, "longitude"),
     };
     if loc.is_empty() { Err(()) } else { Ok(loc) }
 }
@@ -308,9 +313,10 @@ fn resolve_time(map: &HashMap<String, FieldValue>) -> core::result::Result<NewTi
     let year = i16_from_field(map, "year").ok_or(())?;
     Ok(NewTimePeriod {
         year,
-        quarter: i16_from_field(map, "quarter"),
-        month:   i16_from_field(map, "month"),
-        day:     i16_from_field(map, "day"),
+        // Clamp to DB check-constraint ranges; out-of-range values become NULL.
+        quarter: i16_from_field(map, "quarter").filter(|&q| (1..=4).contains(&q)),
+        month:   i16_from_field(map, "month")  .filter(|&m| (1..=12).contains(&m)),
+        day:     i16_from_field(map, "day")    .filter(|&d| (1..=31).contains(&d)),
     })
 }
 
@@ -378,5 +384,17 @@ mod tests {
         let record = csv::StringRecord::from(vec![""]);
         let result = row_to_canonical(&headers, &record);
         assert!(matches!(result.get("col").unwrap(), FieldValue::Null));
+    }
+
+    #[test]
+    fn row_to_canonical_lowercases_headers() {
+        let headers = vec!["State".to_string(), "YEAR".to_string(), "My_Value".to_string()];
+        let record = csv::StringRecord::from(vec!["Colorado", "2024", "42"]);
+        let result = row_to_canonical(&headers, &record);
+        assert!(result.contains_key("state"));
+        assert!(result.contains_key("year"));
+        assert!(result.contains_key("my_value"));
+        assert!(!result.contains_key("State"));
+        assert!(!result.contains_key("YEAR"));
     }
 }

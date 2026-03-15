@@ -52,6 +52,10 @@ async fn main() -> anyhow::Result<()> {
             let pipeline = pipeline::IngestPipeline::new(&pool);
             for source in sources {
                 for file in &source.files {
+                    if pipeline.already_ingested(file).await? {
+                        info!(source = source.name, file, "skipping (already ingested)");
+                        continue;
+                    }
                     let count = pipeline.run(source, file).await?;
                     if count > 0 {
                         println!("{}: {} observations inserted from {}", source.name, count, file);
@@ -75,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
             match file {
                 Some(path) => {
-                    // --file provided: bypass skip check by calling pipeline directly
+                    // --file provided: always process, no skip check
                     let count = pipeline.run(source, &path).await?;
                     println!("inserted {count} observations");
                 }
@@ -85,6 +89,10 @@ async fn main() -> anyhow::Result<()> {
                         return Ok(());
                     }
                     for file in &source.files {
+                        if pipeline.already_ingested(file).await? {
+                            info!(source = source_name, file, "skipping (already ingested)");
+                            continue;
+                        }
                         let count = pipeline.run(source, file).await?;
                         if count > 0 {
                             println!("{}: {} observations inserted from {}", source.name, count, file);

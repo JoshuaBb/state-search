@@ -1,6 +1,6 @@
-# Rust build artifacts
+.gitignore# Rust build artifacts
 /target/
-
+.idea/
 # SQLx offline query cache (only needed if using compile-time query! macros)
 .sqlx/
 

@@ -120,7 +120,7 @@ pub fn build_resolved_field(
     }
 
     Ok(ResolvedField {
-        source_col: def.source.clone(),
+        source_col: def.source.to_lowercase(),
         chain,
         field_on_failure,
     })
