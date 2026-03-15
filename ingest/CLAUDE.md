@@ -10,7 +10,8 @@ Read `rules.md` before making any changes to this crate. The rules document the 
 | `src/pipeline/mod.rs` | `IngestPipeline::run` and `process_rows` — top-level orchestration |
 | `src/pipeline/record.rs` | `process_record` — per-row transform pipeline |
 | `src/pipeline/dimensions.rs` | Location/time dimension upserts + location cache |
-| `src/pipeline/observations.rs` | Metric extraction and `NewObservation` construction |
+| `src/pipeline/schema.rs` | Schema seeding/validation and normalized_data collection |
+| `src/pipeline/derived.rs` | Derived field resolution from dimension tables |
 | `src/pipeline/row.rs` | CSV row parsing and typed field extractors |
 | `src/transforms/` | Field transform chain: coerce, rules, resolve |
 
@@ -42,7 +43,7 @@ crate::stream::batched_channel_sink(
 
 ## Adding a New Canonical Field
 
-If the field is a dimension (location or time), add it to the extraction logic in `dimensions.rs` and the skip-set in `observations.rs`. If it's a metric, no change needed — unknown fields fall through to metric extraction automatically.
+If the field is a dimension (location or time), add it to the extraction logic in `dimensions.rs` and the skip-set in `schema.rs`. If it's a metric, no change needed — unknown fields fall through to metric extraction automatically.
 
 ## What Not to Do
 
