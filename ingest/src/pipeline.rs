@@ -17,10 +17,11 @@ use state_search_core::{
     Db,
 };
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::transforms::{
     chain::apply_chain,
-    resolve::build_resolved_field_map,
+    resolve::{build_resolved_field_map, ResolvedFieldMap},
     FieldValue,
 };
 
@@ -58,9 +59,17 @@ impl<'a> IngestPipeline<'a> {
 
     pub async fn run(&self, source: &SourceConfig, file_path: &str) -> anyhow::Result<u64> {
         let source_name = source.name.as_str();
-        info!(source = source_name, file = file_path, "starting ingest");
+        let ingest_run_id = Uuid::new_v4();
 
-        // Resolve field map once — hard errors here are config problems
+        // Log BEFORE any DB writes so operators can identify the run even if the
+        // process dies before the cleanup branch executes.
+        info!(
+            source = source_name,
+            file = file_path,
+            %ingest_run_id,
+            "starting ingest"
+        );
+
         let resolved = build_resolved_field_map(source)
             .with_context(|| format!("failed to resolve field map for source '{source_name}'"))?;
 
@@ -72,148 +81,196 @@ impl<'a> IngestPipeline<'a> {
 
         let default_country = infer_country_from_path(file_path);
 
-        // Open transaction for the entire file
-        let mut tx = self.db.begin().await?;
-        let db = self.db; // pool for dimension upserts (outside the file transaction)
         let mut total = 0u64;
         let mut row_num = 0u64;
 
-        let result: anyhow::Result<u64> = async {
-            for record in reader.records() {
-                let record = record?;
-                row_num += 1;
-
-                // 1. Build raw map: trim all strings, empty → Null
-                let raw = row_to_canonical(&headers, &record);
-                debug!(row = row_num, "parsed and trimmed CSV row");
-
-                // 2. Store raw row inside transaction
-                let raw_json = canonical_to_json(&raw);
-                let raw_id: i64 = sqlx::query_scalar(
-                    "INSERT INTO raw_imports (source_id, source_file, raw_data) VALUES ($1, $2, $3) RETURNING id",
-                )
-                .bind(Option::<i64>::None)
-                .bind(file_path)
-                .bind(&raw_json)
-                .fetch_one(&mut *tx)
-                .await?;
-
-                // 3. Apply field transforms per resolved field
-                let mut transformed: HashMap<String, FieldValue> = HashMap::new();
-                let mut skip_row = false;
-
-                for (canonical, resolved_field) in &resolved {
-                    let raw_val = raw
-                        .get(resolved_field.source_col.as_str())
-                        .map(|v| v.clone())
-                        .unwrap_or(FieldValue::Null);
-
-                    match apply_chain(raw_val, &resolved_field.chain) {
-                        Ok(v) => { transformed.insert(canonical.clone(), v); }
-                        Err(OnFailure::SkipRow) => {
-                            warn!(
-                                row = row_num,
-                                field = canonical,
-                                source = source_name,
-                                "SkipRow: discarding row"
-                            );
-                            skip_row = true;
-                            break;
-                        }
-                        Err(OnFailure::SkipDataset) => {
-                            return Err(IngestError::DatasetSkipped {
-                                file: file_path.to_string(),
-                                reason: format!(
-                                    "transform failure on field '{}' at row {}",
-                                    canonical, row_num
-                                ),
-                            }
-                            .into());
-                        }
-                        // Ignore is handled inside apply_chain (returns Ok(Null)) — this arm
-                        // is unreachable but kept for exhaustive matching.
-                        Err(OnFailure::Ignore) => unreachable!(),
-                    }
-                }
-
-                // Check SkipRow BEFORE unmapped-column passthrough to avoid unnecessary work.
-                if skip_row {
-                    continue;
-                }
-
-                // Pass through unmapped columns (preserve existing metric-extraction behavior)
-                for (col, val) in &raw {
-                    if !resolved.values().any(|r| r.source_col == *col) {
-                        transformed.insert(col.clone(), val.clone());
-                    }
-                }
-
-                // 4. Resolve dimensions using the pool (not the file transaction).
-                // Dimensions are shared global state; a constraint violation on one row
-                // must not abort the transaction and kill the rest of the file.
-                let location_id = match resolve_location(&transformed, default_country.as_deref()) {
-                    Ok(loc) => {
-                        match LocationRepository::new(db).upsert(loc).await {
-                            Ok(id) => { debug!(row = row_num, location_id = id, "resolved location"); Some(id) }
-                            Err(e) => { warn!(row = row_num, error = %e, "could not resolve location"); None }
-                        }
-                    }
-                    Err(_) => None,
-                };
-
-                let time_id = match resolve_time(&transformed) {
-                    Ok(t) => {
-                        match TimeRepository::new(db).upsert(t).await {
-                            Ok(id) => { debug!(row = row_num, time_id = id, "resolved time"); Some(id) }
-                            Err(e) => { warn!(row = row_num, error = %e, "could not resolve time"); None }
-                        }
-                    }
-                    Err(_) => None,
-                };
-
-                // 5. Extract metrics
-                let metrics = extract_metrics(&transformed);
-                if metrics.is_empty() {
-                    warn!(row = row_num, "no metric fields found");
-                }
-
-                let observations: Vec<NewObservation> = metrics
-                    .into_iter()
-                    .map(|(name, value)| NewObservation {
-                        raw_import_id: Some(raw_id),
-                        location_id,
-                        time_id,
-                        source_name: Some(source_name.to_string()),
-                        metric_name: name,
-                        metric_value: value,
-                        attributes: None,
-                    })
-                    .collect();
-
-                // Use bulk_create_with_tx so observations are part of the file transaction.
-                let count = ObservationRepository::bulk_create_with_tx(&mut tx, observations).await?;
-                debug!(row = row_num, inserted = count, "row complete");
-                total += count;
-
-                if row_num % 1000 == 0 {
-                    info!(source = source_name, file = file_path, rows = row_num, observations = total, "ingest progress");
-                }
-            }
-            Ok(total)
-        }
-        .await;
+        let result = self.process_rows(
+            source,
+            file_path,
+            ingest_run_id,
+            &resolved,
+            &headers,
+            default_country.as_deref(),
+            &mut reader,
+            &mut total,
+            &mut row_num,
+        ).await;
 
         match result {
-            Ok(n) => {
-                tx.commit().await?;
-                info!(source = source_name, file = file_path, observations = n, "ingest complete");
-                Ok(n)
+            Ok(()) => {
+                info!(
+                    source = source_name,
+                    file = file_path,
+                    %ingest_run_id,
+                    observations = total,
+                    "ingest complete"
+                );
+                Ok(total)
             }
             Err(e) => {
-                tx.rollback().await?;
+                warn!(
+                    source = source_name,
+                    file = file_path,
+                    %ingest_run_id,
+                    error = %e,
+                    "ingest failed — cleaning up partial observations"
+                );
+                match ObservationRepository::delete_by_ingest_run(self.db, ingest_run_id).await {
+                    Ok(deleted) => {
+                        info!(
+                            %ingest_run_id,
+                            deleted,
+                            "cleanup complete"
+                        );
+                    }
+                    Err(cleanup_err) => {
+                        warn!(
+                            %ingest_run_id,
+                            error = %cleanup_err,
+                            "cleanup failed — manual intervention required"
+                        );
+                    }
+                }
                 Err(e)
             }
         }
+    }
+
+    async fn process_rows(
+        &self,
+        source: &SourceConfig,
+        file_path: &str,
+        ingest_run_id: Uuid,
+        resolved: &ResolvedFieldMap,
+        headers: &[String],
+        default_country: Option<&str>,
+        reader: &mut csv::Reader<std::fs::File>,
+        total: &mut u64,
+        row_num: &mut u64,
+    ) -> anyhow::Result<()> {
+        let source_name = source.name.as_str();
+        let db = self.db;
+
+        for record in reader.records() {
+            let record = record?;
+            *row_num += 1;
+
+            // 1. Build raw map: trim all strings, empty → Null
+            let raw = row_to_canonical(headers, &record);
+            debug!(row = row_num, "parsed and trimmed CSV row");
+
+            // 2. Store raw row
+            let raw_json = canonical_to_json(&raw);
+            sqlx::query(
+                "INSERT INTO raw_imports (source_id, source_file, raw_data) VALUES ($1, $2, $3)",
+            )
+            .bind(Option::<i64>::None)
+            .bind(file_path)
+            .bind(&raw_json)
+            .execute(db)
+            .await?;
+
+            // 3. Apply field transforms per resolved field
+            let mut transformed: HashMap<String, FieldValue> = HashMap::new();
+            let mut skip_row = false;
+
+            for (canonical, resolved_field) in resolved {
+                let raw_val = raw
+                    .get(resolved_field.source_col.as_str())
+                    .cloned()
+                    .unwrap_or(FieldValue::Null);
+
+                match apply_chain(raw_val, &resolved_field.chain) {
+                    Ok(v) => { transformed.insert(canonical.clone(), v); }
+                    Err(OnFailure::SkipRow) => {
+                        warn!(
+                            row = row_num,
+                            field = canonical,
+                            source = source_name,
+                            "SkipRow: discarding row"
+                        );
+                        skip_row = true;
+                        break;
+                    }
+                    Err(OnFailure::SkipDataset) => {
+                        return Err(IngestError::DatasetSkipped {
+                            file: file_path.to_string(),
+                            reason: format!(
+                                "transform failure on field '{}' at row {}",
+                                canonical, row_num
+                            ),
+                        }.into());
+                    }
+                    // Ignore is handled inside apply_chain (returns Ok(Null)) — this arm
+                    // is unreachable but kept for exhaustive matching.
+                    Err(OnFailure::Ignore) => unreachable!(),
+                }
+            }
+
+            // Check SkipRow BEFORE unmapped-column passthrough to avoid unnecessary work.
+            if skip_row { continue; }
+
+            // Pass through unmapped columns (preserve existing metric-extraction behavior)
+            for (col, val) in &raw {
+                if !resolved.values().any(|r| r.source_col == *col) {
+                    transformed.insert(col.clone(), val.clone());
+                }
+            }
+
+            // 4. Resolve dimensions
+            let location_id = match resolve_location(&transformed, default_country) {
+                Ok(loc) => match LocationRepository::new(db).upsert(loc).await {
+                    Ok(id) => { debug!(row = row_num, location_id = id, "resolved location"); Some(id) }
+                    Err(e) => { warn!(row = row_num, error = %e, "could not resolve location"); None }
+                },
+                Err(_) => None,
+            };
+
+            let time_id = match resolve_time(&transformed) {
+                Ok(t) => match TimeRepository::new(db).upsert(t).await {
+                    Ok(id) => { debug!(row = row_num, time_id = id, "resolved time"); Some(id) }
+                    Err(e) => { warn!(row = row_num, error = %e, "could not resolve time"); None }
+                },
+                Err(_) => None,
+            };
+
+            // 5. Extract metrics
+            let metrics = extract_metrics(&transformed);
+            if metrics.is_empty() {
+                warn!(row = row_num, "no metric fields found");
+            }
+
+            // Note: raw_import_id is set to NULL — a future migration can link them if needed.
+            let observations: Vec<NewObservation> = metrics
+                .into_iter()
+                .map(|(name, value)| NewObservation {
+                    raw_import_id: None,
+                    location_id,
+                    time_id,
+                    source_name: Some(source_name.to_string()),
+                    metric_name: name,
+                    metric_value: value,
+                    attributes: None,
+                    ingest_run_id,
+                })
+                .collect();
+
+            let count = ObservationRepository::new(db).bulk_create(observations).await?;
+            debug!(row = row_num, inserted = count, "row complete");
+            *total += count;
+
+            if *row_num % 1000 == 0 {
+                info!(
+                    source = source_name,
+                    file = file_path,
+                    rows = row_num,
+                    observations = total,
+                    "ingest progress"
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -396,5 +453,15 @@ mod tests {
         assert!(result.contains_key("my_value"));
         assert!(!result.contains_key("State"));
         assert!(!result.contains_key("YEAR"));
+    }
+
+    #[test]
+    fn infer_country_still_works_after_refactor() {
+        // Smoke-check that the helper is intact after the pipeline changes.
+        assert_eq!(
+            infer_country_from_path("data/usa/co/file.csv"),
+            Some("USA".to_string())
+        );
+        assert_eq!(infer_country_from_path("data/co/file.csv"), None);
     }
 }

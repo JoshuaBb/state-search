@@ -23,6 +23,7 @@ clap    = { version = "4", features = ["derive"] }
 phf       = { version = "0.11", features = ["macros"] }
 chrono    = { workspace = true }
 thiserror = { workspace = true }
+uuid      = { workspace = true }
 
 [dev-dependencies]
 toml = "0.8"
