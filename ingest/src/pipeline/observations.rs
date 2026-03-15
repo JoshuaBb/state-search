@@ -1,7 +1,20 @@
 use std::collections::HashMap;
 
-use state_search_core::models::observation::NewObservation;
 use uuid::Uuid;
+
+/// Temporary stub — NewObservation removed in pipeline rewrite (Task 10).
+#[derive(Debug)]
+pub(super) struct NewObservation {
+    pub raw_import_id: Option<i64>,
+    pub location_id: Option<i64>,
+    pub time_id: Option<i64>,
+    pub source_name: Option<String>,
+    pub metric_name: String,
+    pub metric_value: Option<f64>,
+    pub attributes: Option<serde_json::Value>,
+    pub context_id: Option<i64>,
+    pub ingest_run_id: Uuid,
+}
 
 use crate::transforms::FieldValue;
 
