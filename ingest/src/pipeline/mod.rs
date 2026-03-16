@@ -1,4 +1,5 @@
 mod derived;
+mod dim;
 mod dimensions;
 mod export;
 mod record;
@@ -15,6 +16,7 @@ use futures::{stream, StreamExt};
 use state_search_core::{
     config::SourceConfig,
     repositories::normalized_import::NormalizedImportRepository,
+    repositories::dim_file_log::DimFileLogRepository,
     Db,
 };
 use tracing::{info, warn};
@@ -26,8 +28,8 @@ use self::export::generate_export_sql;
 use self::record::process_record;
 use self::row::infer_country_from_path;
 
-const ROW_CONCURRENCY: usize = 8;
-const OBS_BATCH_SIZE: usize = 500;
+pub(super) const ROW_CONCURRENCY: usize = 8;
+pub(super) const OBS_BATCH_SIZE: usize = 500;
 const EXPORT_BASE: &str = "exports";
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +47,7 @@ impl<'a> IngestPipeline<'a> {
         Self { db }
     }
 
+    /// Check whether a fact source file has already been ingested (via raw_imports).
     pub async fn already_ingested(&self, file_path: &str) -> anyhow::Result<bool> {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM raw_imports WHERE source_file = $1)",
@@ -55,18 +58,27 @@ impl<'a> IngestPipeline<'a> {
         Ok(exists)
     }
 
+    /// Check whether a dim source file has already been ingested (via dim_file_log).
+    pub async fn dim_already_ingested(&self, source_name: &str, file_path: &str) -> anyhow::Result<bool> {
+        DimFileLogRepository::exists_for_file(self.db, source_name, file_path).await
+            .map_err(Into::into)
+    }
+
+    /// Run dim-only ingestion for a source with target set.
+    pub async fn run_dim(&self, source: &SourceConfig, file_path: &str) -> anyhow::Result<u64> {
+        dim::run_dim(source, file_path, self.db).await
+    }
+
     pub async fn run(&self, source: &SourceConfig, file_path: &str) -> anyhow::Result<u64> {
         let source_name = source.name.as_str();
         let ingest_run_id = Uuid::new_v4();
 
         info!(source = source_name, file = file_path, %ingest_run_id, "starting ingest");
 
-        // Seed import_schema and validate before opening the CSV
         let schema = schema::seed_and_validate(source, self.db)
             .await
             .with_context(|| format!("schema seed/validate failed for source '{source_name}'"))?;
 
-        // Derived fields map: canonical_name → type (used for skip-set in schema functions)
         let derived_fields: HashMap<String, String> = source.derived.iter()
             .map(|(k, v)| (k.clone(), v.field_type.clone()))
             .collect();
@@ -79,18 +91,17 @@ impl<'a> IngestPipeline<'a> {
 
         let headers: Vec<String> = reader.headers()?.iter().map(|h| h.to_string()).collect();
 
+        // Validate exclude_columns and unique_key at startup
+        dim::validate_exclude_columns(source_name, &source.exclude_columns, &headers)?;
+        dim::validate_unique_key(source)?;
+
         let default_country = infer_country_from_path(file_path);
 
         let result = self
             .process_rows(
-                source,
-                file_path,
-                ingest_run_id,
-                &resolved,
-                &schema,
-                &derived_fields,
-                &headers,
-                default_country.as_deref(),
+                source, file_path, ingest_run_id,
+                &resolved, &schema, &derived_fields,
+                &headers, default_country.as_deref(),
                 &mut reader,
             )
             .await;
@@ -106,7 +117,7 @@ impl<'a> IngestPipeline<'a> {
                     "ingest failed — cleaning up partial normalized_imports");
                 match NormalizedImportRepository::delete_by_ingest_run(self.db, ingest_run_id).await {
                     Ok(deleted) => info!(%ingest_run_id, deleted, "cleanup complete"),
-                    Err(ce)     => warn!(%ingest_run_id, error = %ce, "cleanup failed — manual intervention required"),
+                    Err(ce)     => warn!(%ingest_run_id, error = %ce, "cleanup failed"),
                 }
                 Err(e)
             }
@@ -122,12 +133,9 @@ impl<'a> IngestPipeline<'a> {
     ) {
         let source_name = source.name.as_str();
         let pg_connection = "host=localhost dbname=state_search";
-
         let sql = generate_export_sql(source_name, ingest_run_id, schema, derived_fields, pg_connection, EXPORT_BASE);
-
         let dir = format!("{EXPORT_BASE}/{source_name}");
         let path = format!("{dir}/export_{ingest_run_id}.sql");
-
         if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, sql)) {
             warn!(source = source_name, %ingest_run_id, error = %e, "failed to write export script");
         } else {
@@ -162,7 +170,6 @@ impl<'a> IngestPipeline<'a> {
                     schema, derived_fields,
                 )
                 .await?;
-                // Convert Option<NewNormalizedImport> to Vec<NewNormalizedImport>
                 Ok::<Vec<_>, anyhow::Error>(maybe_row.into_iter().collect())
             }
         });
