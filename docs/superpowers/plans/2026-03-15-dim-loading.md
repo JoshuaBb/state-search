@@ -2473,8 +2473,6 @@ sources:
     unique_key:
       - location_id
       - time_id
-      - pws_id_number
-      - analyte_name
     # exclude_columns: []  # add any columns to drop here
     description: Colorado public drinking water quality
     files:
