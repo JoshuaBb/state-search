@@ -1496,12 +1496,28 @@ pub(super) async fn process_record(
         }
     };
 
-    // Derive normalized_imports.id: deterministic if unique_key set, else random
+    // Derive normalized_imports.id: deterministic if unique_key set, else random.
+    // location_id / time_id may appear in unique_key — inject them as Str values so
+    // derive_uuid can find them by name.
     let row_id = if source.unique_key.is_empty() {
         Uuid::new_v4()
     } else {
+        let key_set: HashSet<&str> = source.unique_key.iter().map(String::as_str).collect();
+        let mut key_map: HashMap<String, FieldValue> = transformed.clone();
+        if key_set.contains("location_id") {
+            key_map.insert(
+                "location_id".to_string(),
+                FieldValue::Str(location_id.map(|id| id.to_string()).unwrap_or_default()),
+            );
+        }
+        if key_set.contains("time_id") {
+            key_map.insert(
+                "time_id".to_string(),
+                FieldValue::Str(time_id.map(|id| id.to_string()).unwrap_or_default()),
+            );
+        }
         let key_cols: Vec<&str> = source.unique_key.iter().map(String::as_str).collect();
-        derive_uuid(&key_cols, &transformed)
+        derive_uuid(&key_cols, &key_map)
     };
 
     debug!(row = row_num, "row ready");
@@ -1652,12 +1668,18 @@ pub(super) fn validate_exclude_columns(
     Ok(())
 }
 
-/// Validate that every entry in `unique_key` is a canonical name declared in
-/// `fields` or `derived` on this source. Returns Err on the first invalid entry.
+/// `location_id` and `time_id` are always valid unique_key entries — they are FK
+/// columns resolved from dim tables during ingestion and injected into the key map.
+const FK_KEY_COLUMNS: &[&str] = &["location_id", "time_id"];
+
+/// Validate that every entry in `unique_key` is either a canonical name declared in
+/// `fields` or `derived`, or one of the FK key columns (`location_id`, `time_id`).
+/// Returns Err on the first invalid entry.
 pub(super) fn validate_unique_key(source: &SourceConfig) -> anyhow::Result<()> {
     let canonical_names: HashSet<&str> = source.fields.values()
         .map(|f| f.canonical.as_str())
         .chain(source.derived.keys().map(String::as_str))
+        .chain(FK_KEY_COLUMNS.iter().copied())
         .collect();
     for col in &source.unique_key {
         if !canonical_names.contains(col.as_str()) {
@@ -1986,6 +2008,13 @@ mod tests {
         let source = make_source("src", vec![], vec![]);
         assert!(validate_unique_key(&source).is_ok());
     }
+
+    #[test]
+    fn validate_unique_key_allows_fk_columns() {
+        // location_id and time_id are always valid regardless of declared fields
+        let source = make_source("src", vec!["location_id", "time_id"], vec![]);
+        assert!(validate_unique_key(&source).is_ok());
+    }
 }
 ```
 
@@ -2011,7 +2040,7 @@ Expected: `dim.rs` compiles. Remaining errors are in `mod.rs` from the fact-path
 cargo test -p state-search-ingest dim 2>&1
 ```
 
-Expected: all 6 validation tests pass.
+Expected: all 7 validation tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -2442,8 +2471,8 @@ Open `config/sources.yml` and add `unique_key` to the existing source. Good cand
 sources:
   - name: co_public_drinking_water
     unique_key:
-      - year
-      - quarter
+      - location_id
+      - time_id
       - pws_id_number
       - analyte_name
     # exclude_columns: []  # add any columns to drop here
