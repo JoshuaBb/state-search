@@ -1,6 +1,10 @@
 # config/sources.yml
 sources:
   - name: co_public_drinking_water
+    unique_key:
+      - location_id
+      - time_id
+    # exclude_columns: []  # add any columns to drop here
     description: Colorado public drinking water quality
     files:
       - data/usa/co/public_drinking_water/public_drinking_water_2026-03-14.csv
