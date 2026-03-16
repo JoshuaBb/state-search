@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use state_search_core::{
     config::OnFailure,
@@ -13,8 +13,9 @@ use super::{
     IngestError,
     derived::resolve_derived,
     dimensions::{resolve_location_id, resolve_time_id, LocationCache},
-    row::{canonical_to_json, row_to_canonical},
+    row::{canonical_to_json, row_to_canonical, strip_excluded_columns},
     schema::{collect_normalized_data, validate_completeness},
+    uuid::derive_uuid,
 };
 
 pub(super) enum RowOutcome {
@@ -23,9 +24,6 @@ pub(super) enum RowOutcome {
     Abort(anyhow::Error),
 }
 
-/// Process a single CSV record.
-/// Returns Some(NewNormalizedImport) on success, None if the row is skipped.
-/// Returns Err only on SkipDataset (abort the entire file).
 pub(super) async fn process_record(
     record: csv::StringRecord,
     row_num: u64,
@@ -41,10 +39,24 @@ pub(super) async fn process_record(
     derived_fields: &HashMap<String, String>,
 ) -> anyhow::Result<Option<NewNormalizedImport>> {
     let source_name = source.name.as_str();
-    let raw = row_to_canonical(headers, &record);
+
+    // Strip excluded columns before any processing
+    let (effective_headers, effective_record);
+    let (h_ref, r_ref): (&[String], &csv::StringRecord) = if source.exclude_columns.is_empty() {
+        (headers, &record)
+    } else {
+        let excluded: HashSet<String> = source.exclude_columns.iter()
+            .map(|c| c.to_lowercase())
+            .collect();
+        let (fh, fr) = strip_excluded_columns(headers, &record, &excluded);
+        effective_headers = fh;
+        effective_record  = fr;
+        (&effective_headers, &effective_record)
+    };
+
+    let raw = row_to_canonical(h_ref, r_ref);
     debug!(row = row_num, "parsed CSV row");
 
-    // Step 2: store raw row, capture raw_import_id
     let raw_import_id: i64 = sqlx::query_scalar(
         "INSERT INTO raw_imports (source_id, source_file, raw_data) VALUES ($1, $2, $3) RETURNING id",
     )
@@ -54,26 +66,22 @@ pub(super) async fn process_record(
     .fetch_one(db)
     .await?;
 
-    // Step 3: apply transforms (no passthrough — schema is strict)
     let transformed = match apply_all_transforms(&raw, resolved, row_num, source_name, file_path) {
         RowOutcome::Proceed(t) => t,
         RowOutcome::Skip       => return Ok(None),
         RowOutcome::Abort(e)   => return Err(e),
     };
 
-    // Step 4: validate completeness (all required schema fields present)
     if let Err(msg) = validate_completeness(&transformed, schema, derived_fields, row_num) {
         warn!(row = row_num, "{}", msg);
         return Ok(None);
     }
 
-    // Step 5: resolve dimension FKs
     let (location_id, time_id) = tokio::join!(
         resolve_location_id(&transformed, default_country, db, row_num, location_cache),
         resolve_time_id(&transformed, db, row_num),
     );
 
-    // Steps 6-7: resolve derived fields (prerequisite check + dim lookups)
     let mut normalized_data = serde_json::json!({});
     if let Err(msg) = resolve_derived(
         &mut normalized_data, source, location_id, time_id, db, row_num,
@@ -82,7 +90,6 @@ pub(super) async fn process_record(
         return Ok(None);
     }
 
-    // Step 8: collect non-dimension, non-derived fields into JSONB
     let normalized_data = match collect_normalized_data(
         &transformed, schema, derived_fields, &normalized_data, row_num,
     ) {
@@ -93,18 +100,41 @@ pub(super) async fn process_record(
         }
     };
 
+    // Derive normalized_imports.id: deterministic if unique_key set, else random.
+    // location_id / time_id may appear in unique_key — inject them as Str values so
+    // derive_uuid can find them by name.
+    let row_id = if source.unique_key.is_empty() {
+        Uuid::new_v4()
+    } else {
+        let key_set: HashSet<&str> = source.unique_key.iter().map(String::as_str).collect();
+        let mut key_map: HashMap<String, FieldValue> = transformed.clone();
+        if key_set.contains("location_id") {
+            key_map.insert(
+                "location_id".to_string(),
+                FieldValue::Str(location_id.map(|id| id.to_string()).unwrap_or_default()),
+            );
+        }
+        if key_set.contains("time_id") {
+            key_map.insert(
+                "time_id".to_string(),
+                FieldValue::Str(time_id.map(|id| id.to_string()).unwrap_or_default()),
+            );
+        }
+        let key_cols: Vec<&str> = source.unique_key.iter().map(String::as_str).collect();
+        derive_uuid(&key_cols, &key_map)
+    };
+
     debug!(row = row_num, "row ready");
     Ok(Some(NewNormalizedImport {
-        raw_import_id: Some(raw_import_id),
+        id:              row_id,
+        raw_import_id:   Some(raw_import_id),
         location_id,
         time_id,
-        source_name: source_name.to_string(),
+        source_name:     source_name.to_string(),
         ingest_run_id,
         normalized_data,
     }))
 }
-
-// ── Transform helpers ──────────────────────────────────────────────────────────
 
 fn apply_all_transforms(
     raw: &HashMap<String, FieldValue>,

@@ -1,5 +1,6 @@
 use state_search_core::{config::SourceConfig, Db};
 use tracing::warn;
+use uuid::Uuid;
 
 /// Resolve derived fields from dimension tables and insert into normalized_data.
 ///
@@ -11,8 +12,8 @@ use tracing::warn;
 pub(super) async fn resolve_derived(
     normalized_data: &mut serde_json::Value,
     source: &SourceConfig,
-    location_id: Option<i64>,
-    time_id: Option<i64>,
+    location_id: Option<Uuid>,
+    time_id: Option<Uuid>,
     db: &Db,
     row_num: u64,
 ) -> Result<(), String> {

@@ -6,17 +6,22 @@ use state_search_core::{
     Db,
 };
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 use crate::transforms::FieldValue;
 use super::row::{f64_from_field, i16_from_field, str_from_field};
+use super::uuid::derive_uuid;
 
-/// Shared cache mapping a location's content hash to its `dim_location` primary key.
-/// Avoids repeated DB round-trips for rows that share the same location.
-pub(super) type LocationCache = Arc<tokio::sync::RwLock<HashMap<String, i64>>>;
+/// Shared cache mapping a location's content hash to its `dim_location` UUID PK.
+pub(super) type LocationCache = Arc<tokio::sync::RwLock<HashMap<String, Uuid>>>;
 
 pub(super) fn new_location_cache() -> LocationCache {
     Arc::new(tokio::sync::RwLock::new(HashMap::new()))
 }
+
+// Hardcoded internal unique-key columns for fact-path dim upserts (alphabetical for stable sort)
+const LOC_KEY_COLS: &[&str] = &["county", "country", "fips_code", "latitude", "longitude", "zip_code"];
+const TIME_KEY_COLS: &[&str] = &["day", "month", "quarter", "year"];
 
 // ── Location ──────────────────────────────────────────────────────────────────
 
@@ -26,7 +31,7 @@ pub(super) async fn resolve_location_id(
     db: &Db,
     row_num: u64,
     cache: &LocationCache,
-) -> Option<i64> {
+) -> Option<Uuid> {
     let loc = resolve_location(transformed, default_country).ok()?;
     let key = location_cache_key(&loc);
 
@@ -37,7 +42,7 @@ pub(super) async fn resolve_location_id(
     match LocationRepository::new(db).upsert(loc).await {
         Ok(id) => {
             cache.write().await.insert(key, id);
-            debug!(row = row_num, location_id = id, "resolved location");
+            debug!(row = row_num, ?id, "resolved location");
             Some(id)
         }
         Err(e) => {
@@ -51,7 +56,16 @@ fn resolve_location(
     map: &HashMap<String, FieldValue>,
     default_country: Option<&str>,
 ) -> Result<NewLocation, ()> {
+    // Build a temporary map including the default country so derive_uuid sees it
+    let mut tmp = map.clone();
+    if tmp.get("country").map_or(true, |v| matches!(v, FieldValue::Null)) {
+        if let Some(c) = default_country {
+            tmp.insert("country".to_string(), FieldValue::Str(c.to_string()));
+        }
+    }
+
     let loc = NewLocation {
+        id:        derive_uuid(LOC_KEY_COLS, &tmp),
         county:    str_from_field(map, "county"),
         country:   str_from_field(map, "country")
                        .or_else(|| default_country.map(str::to_string)),
@@ -63,18 +77,9 @@ fn resolve_location(
     if loc.is_empty() { Err(()) } else { Ok(loc) }
 }
 
-/// Stable cache key for a `NewLocation`.
-/// Uses `.to_bits()` for f64 fields to avoid the `Hash` limitation on floats.
 fn location_cache_key(loc: &NewLocation) -> String {
-    format!(
-        "{}|{}|{}|{}|{}|{}",
-        loc.county   .as_deref().unwrap_or(""),
-        loc.country  .as_deref().unwrap_or(""),
-        loc.zip_code .as_deref().unwrap_or(""),
-        loc.fips_code.as_deref().unwrap_or(""),
-        loc.latitude .map(f64::to_bits).unwrap_or(0),
-        loc.longitude.map(f64::to_bits).unwrap_or(0),
-    )
+    // Cache key uses the UUID itself — guaranteed unique and consistent
+    loc.id.to_string()
 }
 
 // ── Time ──────────────────────────────────────────────────────────────────────
@@ -83,11 +88,11 @@ pub(super) async fn resolve_time_id(
     transformed: &HashMap<String, FieldValue>,
     db: &Db,
     row_num: u64,
-) -> Option<i64> {
+) -> Option<Uuid> {
     match resolve_time(transformed) {
         Ok(t) => match TimeRepository::new(db).upsert(t).await {
             Ok(id) => {
-                debug!(row = row_num, time_id = id, "resolved time");
+                debug!(row = row_num, ?id, "resolved time");
                 Some(id)
             }
             Err(e) => {
@@ -102,10 +107,21 @@ pub(super) async fn resolve_time_id(
 fn resolve_time(map: &HashMap<String, FieldValue>) -> Result<NewTimePeriod, ()> {
     let year = i16_from_field(map, "year").ok_or(())?;
     Ok(NewTimePeriod {
+        id:      derive_uuid(TIME_KEY_COLS, map),
         year,
-        // Clamp to DB check-constraint ranges; out-of-range values become NULL.
         quarter: i16_from_field(map, "quarter").filter(|&q| (1..=4).contains(&q)),
         month:   i16_from_field(map, "month")  .filter(|&m| (1..=12).contains(&m)),
         day:     i16_from_field(map, "day")    .filter(|&d| (1..=31).contains(&d)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn location_cache_holds_uuid_values() {
+        let cache = new_location_cache();
+        let _: LocationCache = cache;
+    }
 }

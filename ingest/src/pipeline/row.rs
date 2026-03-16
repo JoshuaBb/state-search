@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::transforms::FieldValue;
 
@@ -84,6 +84,23 @@ pub(super) fn i16_from_field(map: &HashMap<String, FieldValue>, key: &str) -> Op
     }
 }
 
+/// Filter headers and record fields together by index, removing excluded columns.
+/// `excluded` keys must already be lowercased.
+/// Preserves header/value alignment since csv::StringRecord is index-based.
+pub(super) fn strip_excluded_columns(
+    headers: &[String],
+    record: &csv::StringRecord,
+    excluded: &HashSet<String>,
+) -> (Vec<String>, csv::StringRecord) {
+    let (filtered_headers, filtered_values): (Vec<String>, Vec<&str>) = headers
+        .iter()
+        .zip(record.iter())
+        .filter(|(h, _)| !excluded.contains(&h.to_lowercase()))
+        .map(|(h, v)| (h.clone(), v))
+        .unzip();
+    (filtered_headers, csv::StringRecord::from(filtered_values))
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 pub(super) fn infer_country_from_path(file_path: &str) -> Option<String> {
@@ -134,6 +151,30 @@ mod tests {
         assert!(result.contains_key("my_value"));
         assert!(!result.contains_key("State"));
         assert!(!result.contains_key("YEAR"));
+    }
+
+    #[test]
+    fn strip_excluded_columns_removes_by_name_case_insensitive() {
+        use std::collections::HashSet;
+        let headers = vec!["State".to_string(), "YEAR".to_string(), "InternalNotes".to_string()];
+        let record = csv::StringRecord::from(vec!["CO", "2024", "ignore_me"]);
+        let excluded: HashSet<String> = ["InternalNotes".to_lowercase()].into();
+
+        let (h, r) = strip_excluded_columns(&headers, &record, &excluded);
+        assert_eq!(h, vec!["State".to_string(), "YEAR".to_string()]);
+        assert_eq!(r.iter().collect::<Vec<_>>(), vec!["CO", "2024"]);
+    }
+
+    #[test]
+    fn strip_excluded_columns_empty_set_returns_unchanged() {
+        use std::collections::HashSet;
+        let headers = vec!["State".to_string(), "Year".to_string()];
+        let record = csv::StringRecord::from(vec!["CO", "2024"]);
+        let excluded: HashSet<String> = HashSet::new();
+
+        let (h, r) = strip_excluded_columns(&headers, &record, &excluded);
+        assert_eq!(h.len(), 2);
+        assert_eq!(r.len(), 2);
     }
 
     #[test]
