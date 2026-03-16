@@ -150,6 +150,9 @@ mod tests {
             files: vec![],
             fields,
             derived: HashMap::new(),
+            target: None,
+            exclude_columns: vec![],
+            unique_key: vec![],
         };
 
         let resolved = build_resolved_field_map(&source).unwrap();

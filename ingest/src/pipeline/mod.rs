@@ -4,6 +4,9 @@ mod export;
 mod record;
 mod row;
 mod schema;
+mod uuid;
+
+pub(super) use uuid::derive_uuid;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -15,7 +18,7 @@ use state_search_core::{
     Db,
 };
 use tracing::{info, warn};
-use uuid::Uuid;
+use ::uuid::Uuid;
 
 use crate::transforms::resolve::{build_resolved_field_map, ResolvedFieldMap};
 use self::dimensions::{new_location_cache, LocationCache};
