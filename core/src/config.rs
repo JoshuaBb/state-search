@@ -1,5 +1,5 @@
 use config::{Config, Environment, File};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::error::Result;
@@ -44,6 +44,13 @@ impl ServerConfig {
 pub struct IngestConfig {
     #[serde(default)]
     pub sources: Vec<SourceConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DimTarget {
+    DimLocation,
+    DimTime,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -108,6 +115,12 @@ pub struct SourceConfig {
     /// canonical name → DerivedFieldDef
     #[serde(default)]
     pub derived: HashMap<String, DerivedFieldDef>,
+    #[serde(default)]
+    pub target: Option<DimTarget>,
+    #[serde(default)]
+    pub exclude_columns: Vec<String>,
+    #[serde(default)]
+    pub unique_key: Vec<String>,
 }
 
 fn default_pool_size() -> u32 { 10 }
@@ -200,5 +213,53 @@ derived: {}
     fn on_failure_ranking() {
         assert!(OnFailure::Ignore < OnFailure::SkipRow);
         assert!(OnFailure::SkipRow < OnFailure::SkipDataset);
+    }
+
+    #[test]
+    fn source_config_with_dim_fields_deserializes() {
+        let src = r#"
+name: us_locations
+target: dim_location
+unique_key:
+  - fips_code
+  - county
+exclude_columns:
+  - internal_notes
+fields:
+  county_fips:
+    canonical: fips_code
+    type: text
+"#;
+        let sc: SourceConfig = serde_yaml::from_str(src).unwrap();
+        assert_eq!(sc.target, Some(DimTarget::DimLocation));
+        assert_eq!(sc.unique_key, vec!["fips_code", "county"]);
+        assert_eq!(sc.exclude_columns, vec!["internal_notes"]);
+    }
+
+    #[test]
+    fn source_config_without_dim_fields_still_parses() {
+        let src = "name: existing_source\nfields: {}\nderived: {}\n";
+        let sc: SourceConfig = serde_yaml::from_str(src).unwrap();
+        assert!(sc.target.is_none());
+        assert!(sc.unique_key.is_empty());
+        assert!(sc.exclude_columns.is_empty());
+    }
+
+    #[test]
+    fn dim_target_serializes_to_snake_case() {
+        let t = DimTarget::DimLocation;
+        let s = serde_json::to_value(t).unwrap();
+        assert_eq!(s.as_str().unwrap(), "dim_location");
+
+        let t2 = DimTarget::DimTime;
+        let s2 = serde_json::to_value(t2).unwrap();
+        assert_eq!(s2.as_str().unwrap(), "dim_time");
+    }
+
+    #[test]
+    fn source_config_with_dim_time_target_deserializes() {
+        let src = "name: time_src\ntarget: dim_time\nfields: {}\nderived: {}\n";
+        let sc: SourceConfig = serde_yaml::from_str(src).unwrap();
+        assert_eq!(sc.target, Some(DimTarget::DimTime));
     }
 }
