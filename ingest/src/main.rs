@@ -16,7 +16,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Ingest all sources from config/sources.toml, skipping already-processed files.
+    /// Ingest all sources from config/sources.yml, skipping already-processed files.
     Reload,
     /// Ingest files for one named source from config. Optionally specify a single file
     /// (bypasses the already-ingested skip check).
@@ -53,13 +53,22 @@ async fn main() -> anyhow::Result<()> {
             let pipeline = pipeline::IngestPipeline::new(&pool);
             for source in sources {
                 for file in &source.files {
-                    if pipeline.already_ingested(file).await? {
+                    let skip = if source.target.is_some() {
+                        pipeline.dim_already_ingested(&source.name, file).await?
+                    } else {
+                        pipeline.already_ingested(file).await?
+                    };
+                    if skip {
                         info!(source = source.name, file, "skipping (already ingested)");
                         continue;
                     }
-                    let count = pipeline.run(source, file).await?;
+                    let count = if source.target.is_some() {
+                        pipeline.run_dim(source, file).await?
+                    } else {
+                        pipeline.run(source, file).await?
+                    };
                     if count > 0 {
-                        println!("{}: {} observations inserted from {}", source.name, count, file);
+                        println!("{}: {} rows inserted from {}", source.name, count, file);
                     }
                 }
             }
@@ -72,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|s| s.name == source_name)
                 .ok_or_else(|| anyhow::anyhow!(
-                    "source '{}' not found in config — add it to config/sources.toml",
+                    "source '{}' not found in config/sources.yml",
                     source_name
                 ))?;
 
@@ -80,9 +89,13 @@ async fn main() -> anyhow::Result<()> {
 
             match file {
                 Some(path) => {
-                    // --file provided: always process, no skip check
-                    let count = pipeline.run(source, &path).await?;
-                    println!("inserted {count} observations");
+                    // --file provided: always process, no skip check (both fact and dim)
+                    let count = if source.target.is_some() {
+                        pipeline.run_dim(source, &path).await?
+                    } else {
+                        pipeline.run(source, &path).await?
+                    };
+                    println!("inserted {count} rows");
                 }
                 None => {
                     if source.files.is_empty() {
@@ -90,13 +103,22 @@ async fn main() -> anyhow::Result<()> {
                         return Ok(());
                     }
                     for file in &source.files {
-                        if pipeline.already_ingested(file).await? {
+                        let skip = if source.target.is_some() {
+                            pipeline.dim_already_ingested(&source.name, file).await?
+                        } else {
+                            pipeline.already_ingested(file).await?
+                        };
+                        if skip {
                             info!(source = source_name, file, "skipping (already ingested)");
                             continue;
                         }
-                        let count = pipeline.run(source, file).await?;
+                        let count = if source.target.is_some() {
+                            pipeline.run_dim(source, file).await?
+                        } else {
+                            pipeline.run(source, file).await?
+                        };
                         if count > 0 {
-                            println!("{}: {} observations inserted from {}", source.name, count, file);
+                            println!("{}: {} rows inserted from {}", source.name, count, file);
                         }
                     }
                 }
@@ -105,4 +127,46 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use state_search_core::config::{DimTarget, SourceConfig};
+    use std::collections::HashMap;
+
+    fn dim_source() -> SourceConfig {
+        SourceConfig {
+            name: "locs".to_string(),
+            description: None,
+            files: vec![],
+            fields: HashMap::new(),
+            derived: HashMap::new(),
+            target: Some(DimTarget::DimLocation),
+            unique_key: vec![],
+            exclude_columns: vec![],
+        }
+    }
+
+    fn fact_source() -> SourceConfig {
+        SourceConfig {
+            name: "facts".to_string(),
+            description: None,
+            files: vec![],
+            fields: HashMap::new(),
+            derived: HashMap::new(),
+            target: None,
+            unique_key: vec![],
+            exclude_columns: vec![],
+        }
+    }
+
+    #[test]
+    fn dim_source_has_target() {
+        assert!(dim_source().target.is_some());
+    }
+
+    #[test]
+    fn fact_source_has_no_target() {
+        assert!(fact_source().target.is_none());
+    }
 }
