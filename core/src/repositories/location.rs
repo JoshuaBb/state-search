@@ -1,4 +1,5 @@
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::{
     error::Result,
@@ -14,17 +15,21 @@ impl<'a> LocationRepository<'a> {
         Self { pool }
     }
 
-    /// Upsert a location and return its id.
-    pub async fn upsert(&self, loc: NewLocation) -> Result<i64> {
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO dim_location (county, country, zip_code, fips_code, latitude, longitude)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (county, country, zip_code) DO UPDATE
-                 SET fips_code = COALESCE(EXCLUDED.fips_code, dim_location.fips_code),
-                     latitude  = COALESCE(EXCLUDED.latitude,  dim_location.latitude),
-                     longitude = COALESCE(EXCLUDED.longitude, dim_location.longitude)
+    /// Upsert a location by its deterministic UUID PK and return the id.
+    pub async fn upsert(&self, loc: NewLocation) -> Result<Uuid> {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO dim_location (id, county, country, zip_code, fips_code, latitude, longitude)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (id) DO UPDATE
+                 SET county     = EXCLUDED.county,
+                     country    = EXCLUDED.country,
+                     zip_code   = EXCLUDED.zip_code,
+                     fips_code  = EXCLUDED.fips_code,
+                     latitude   = EXCLUDED.latitude,
+                     longitude  = EXCLUDED.longitude
              RETURNING id",
         )
+        .bind(loc.id)
         .bind(loc.county)
         .bind(loc.country)
         .bind(loc.zip_code)
@@ -37,12 +42,11 @@ impl<'a> LocationRepository<'a> {
         Ok(id)
     }
 
-    pub async fn find_by_id(&self, id: i64) -> Result<Option<Location>> {
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<Location>> {
         let row = sqlx::query_as::<_, Location>("SELECT * FROM dim_location WHERE id = $1")
             .bind(id)
             .fetch_optional(self.pool)
             .await?;
-
         Ok(row)
     }
 
@@ -54,24 +58,27 @@ impl<'a> LocationRepository<'a> {
         .bind(offset)
         .fetch_all(self.pool)
         .await?;
-
         Ok(rows)
     }
 
-    /// Upsert a location using an existing transaction.
+    /// Upsert using an existing transaction.
     pub async fn upsert_with_tx(
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         loc: NewLocation,
-    ) -> Result<i64> {
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO dim_location (county, country, zip_code, fips_code, latitude, longitude)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (county, country, zip_code) DO UPDATE
-                 SET fips_code = COALESCE(EXCLUDED.fips_code, dim_location.fips_code),
-                     latitude  = COALESCE(EXCLUDED.latitude,  dim_location.latitude),
-                     longitude = COALESCE(EXCLUDED.longitude, dim_location.longitude)
+    ) -> Result<Uuid> {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO dim_location (id, county, country, zip_code, fips_code, latitude, longitude)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (id) DO UPDATE
+                 SET county     = EXCLUDED.county,
+                     country    = EXCLUDED.country,
+                     zip_code   = EXCLUDED.zip_code,
+                     fips_code  = EXCLUDED.fips_code,
+                     latitude   = EXCLUDED.latitude,
+                     longitude  = EXCLUDED.longitude
              RETURNING id",
         )
+        .bind(loc.id)
         .bind(loc.county)
         .bind(loc.country)
         .bind(loc.zip_code)

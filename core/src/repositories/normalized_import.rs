@@ -12,13 +12,13 @@ impl<'a> NormalizedImportRepository<'a> {
         Self { pool }
     }
 
-    /// Bulk insert normalized import rows using a single UNNEST query.
     pub async fn bulk_create(&self, rows: Vec<NewNormalizedImport>) -> Result<u64> {
         if rows.is_empty() {
             return Ok(0);
         }
 
         let len = rows.len();
+        let mut ids              = Vec::with_capacity(len);
         let mut raw_import_ids   = Vec::with_capacity(len);
         let mut location_ids     = Vec::with_capacity(len);
         let mut time_ids         = Vec::with_capacity(len);
@@ -27,6 +27,7 @@ impl<'a> NormalizedImportRepository<'a> {
         let mut normalized_datas = Vec::with_capacity(len);
 
         for row in rows {
+            ids             .push(row.id);
             raw_import_ids  .push(row.raw_import_id);
             location_ids    .push(row.location_id);
             time_ids        .push(row.time_id);
@@ -37,11 +38,13 @@ impl<'a> NormalizedImportRepository<'a> {
 
         sqlx::query(
             "INSERT INTO normalized_imports
-                 (raw_import_id, location_id, time_id, source_name, ingest_run_id, normalized_data)
+                 (id, raw_import_id, location_id, time_id, source_name, ingest_run_id, normalized_data)
              SELECT * FROM UNNEST(
-                 $1::bigint[], $2::bigint[], $3::bigint[], $4::text[], $5::uuid[], $6::jsonb[]
-             )",
+                 $1::uuid[], $2::bigint[], $3::uuid[], $4::uuid[], $5::text[], $6::uuid[], $7::jsonb[]
+             )
+             ON CONFLICT (id) DO NOTHING",
         )
+        .bind(&ids)
         .bind(&raw_import_ids)
         .bind(&location_ids)
         .bind(&time_ids)
@@ -54,7 +57,6 @@ impl<'a> NormalizedImportRepository<'a> {
         Ok(len as u64)
     }
 
-    /// Delete all normalized imports belonging to a given ingest run.
     pub async fn delete_by_ingest_run(pool: &PgPool, ingest_run_id: Uuid) -> Result<u64> {
         let result = sqlx::query(
             "DELETE FROM normalized_imports WHERE ingest_run_id = $1",
@@ -62,7 +64,6 @@ impl<'a> NormalizedImportRepository<'a> {
         .bind(ingest_run_id)
         .execute(pool)
         .await?;
-
         Ok(result.rows_affected())
     }
 }

@@ -1,3 +1,4 @@
+pub mod dim_file_log;
 pub mod import;
 pub mod import_schema;
 pub mod location;

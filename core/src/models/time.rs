@@ -1,22 +1,23 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
 /// Normalized time dimension.
-/// Only `year` is required; quarter/month/day are optional and mutually independent.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct TimePeriod {
-    pub id:         i64,
+    pub id:         Uuid,
     pub year:       i16,
-    pub quarter:    Option<i16>, // 1–4
-    pub month:      Option<i16>, // 1–12
-    pub day:        Option<i16>, // 1–31
-    /// Best-effort resolved date (floor of the period).
+    pub quarter:    Option<i16>,
+    pub month:      Option<i16>,
+    pub day:        Option<i16>,
     pub date_floor: Option<NaiveDate>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+/// `Default` is intentionally NOT derived — the nil UUID is not a valid id.
+#[derive(Debug, Deserialize)]
 pub struct NewTimePeriod {
+    pub id:      Uuid,
     pub year:    i16,
     pub quarter: Option<i16>,
     pub month:   Option<i16>,
@@ -24,7 +25,6 @@ pub struct NewTimePeriod {
 }
 
 impl NewTimePeriod {
-    /// Compute the floor date from available fields.
     pub fn date_floor(&self) -> Option<NaiveDate> {
         let month = self
             .month

@@ -4,6 +4,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::{error::ApiResult, state::AppState};
 
@@ -14,8 +15,8 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 pub struct NormalizedImportQuery {
     pub source_name: Option<String>,
-    pub location_id: Option<i64>,
-    pub time_id:     Option<i64>,
+    pub location_id: Option<Uuid>,
+    pub time_id:     Option<Uuid>,
     #[serde(default = "default_limit")]
     pub limit: i64,
     #[serde(default)]
@@ -31,8 +32,8 @@ async fn query(
     let rows = sqlx::query(
         "SELECT * FROM normalized_imports
          WHERE ($1::text IS NULL OR source_name = $1)
-           AND ($2::bigint IS NULL OR location_id = $2)
-           AND ($3::bigint IS NULL OR time_id = $3)
+           AND ($2::uuid IS NULL OR location_id = $2)
+           AND ($3::uuid IS NULL OR time_id = $3)
          ORDER BY id
          LIMIT $4 OFFSET $5",
     )
@@ -49,11 +50,11 @@ async fn query(
         .iter()
         .map(|r| {
             serde_json::json!({
-                "id":              sqlx::Row::get::<i64, _>(r, "id"),
+                "id":              sqlx::Row::get::<Uuid, _>(r, "id").to_string(),
                 "source_name":     sqlx::Row::get::<String, _>(r, "source_name"),
-                "ingest_run_id":   sqlx::Row::get::<uuid::Uuid, _>(r, "ingest_run_id").to_string(),
-                "location_id":     sqlx::Row::get::<Option<i64>, _>(r, "location_id"),
-                "time_id":         sqlx::Row::get::<Option<i64>, _>(r, "time_id"),
+                "ingest_run_id":   sqlx::Row::get::<Uuid, _>(r, "ingest_run_id").to_string(),
+                "location_id":     sqlx::Row::get::<Option<Uuid>, _>(r, "location_id").map(|id| id.to_string()),
+                "time_id":         sqlx::Row::get::<Option<Uuid>, _>(r, "time_id").map(|id| id.to_string()),
                 "normalized_data": sqlx::Row::get::<serde_json::Value, _>(r, "normalized_data"),
             })
         })

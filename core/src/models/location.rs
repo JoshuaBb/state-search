@@ -1,21 +1,24 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
 /// Normalized location dimension.
-/// All fields are optional — a row may only carry `county`, or only `zip_code`.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Location {
-    pub id:        i64,
-    pub county:    Option<String>, // e.g. "Denver"
-    pub country:   Option<String>, // ISO-3166-1 alpha-3, default "USA"
+    pub id:        Uuid,
+    pub county:    Option<String>,
+    pub country:   Option<String>,
     pub zip_code:  Option<String>,
     pub fips_code: Option<String>,
     pub latitude:  Option<f64>,
     pub longitude: Option<f64>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+/// `Default` is intentionally NOT derived — the nil UUID is not a valid id.
+/// Callers must always provide an explicit `id` via `derive_uuid` or `Uuid::new_v4()`.
+#[derive(Debug, Deserialize)]
 pub struct NewLocation {
+    pub id:        Uuid,
     pub county:    Option<String>,
     pub country:   Option<String>,
     pub zip_code:  Option<String>,
