@@ -16,15 +16,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Ingest all sources from config/sources.yml, skipping already-processed files.
+    /// Ingest all fact sources from config/sources.yml, skipping already-processed files.
     Reload,
-    /// Ingest files for one named source from config. Optionally specify a single file
+    /// Ingest files for one named fact source. Optionally specify a single file
     /// (bypasses the already-ingested skip check).
     Run {
         #[arg(long)]
         source: String,
-        /// Specific file to ingest (bypasses skip check). If omitted, ingests all
-        /// configured files for the source, skipping already-processed ones.
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Ingest all dim sources from config/dims.yml, skipping already-processed files.
+    ReloadDims,
+    /// Ingest files for one named dim source. Optionally specify a single file
+    /// (bypasses the already-ingested skip check).
+    RunDim {
+        #[arg(long)]
+        source: String,
         #[arg(long)]
         file: Option<String>,
     },
@@ -53,20 +61,11 @@ async fn main() -> anyhow::Result<()> {
             let pipeline = pipeline::IngestPipeline::new(&pool);
             for source in sources {
                 for file in &source.files {
-                    let skip = if source.target.is_some() {
-                        pipeline.dim_already_ingested(&source.name, file).await?
-                    } else {
-                        pipeline.already_ingested(file).await?
-                    };
-                    if skip {
+                    if pipeline.already_ingested(file).await? {
                         info!(source = source.name, file, "skipping (already ingested)");
                         continue;
                     }
-                    let count = if source.target.is_some() {
-                        pipeline.run_dim(source, file).await?
-                    } else {
-                        pipeline.run(source, file).await?
-                    };
+                    let count = pipeline.run(source, file).await?;
                     if count > 0 {
                         println!("{}: {} rows inserted from {}", source.name, count, file);
                     }
@@ -84,17 +83,10 @@ async fn main() -> anyhow::Result<()> {
                     "source '{}' not found in config/sources.yml",
                     source_name
                 ))?;
-
             let pipeline = pipeline::IngestPipeline::new(&pool);
-
             match file {
                 Some(path) => {
-                    // --file provided: always process, no skip check (both fact and dim)
-                    let count = if source.target.is_some() {
-                        pipeline.run_dim(source, &path).await?
-                    } else {
-                        pipeline.run(source, &path).await?
-                    };
+                    let count = pipeline.run(source, &path).await?;
                     println!("inserted {count} rows");
                 }
                 None => {
@@ -103,20 +95,67 @@ async fn main() -> anyhow::Result<()> {
                         return Ok(());
                     }
                     for file in &source.files {
-                        let skip = if source.target.is_some() {
-                            pipeline.dim_already_ingested(&source.name, file).await?
-                        } else {
-                            pipeline.already_ingested(file).await?
-                        };
-                        if skip {
+                        if pipeline.already_ingested(file).await? {
                             info!(source = source_name, file, "skipping (already ingested)");
                             continue;
                         }
-                        let count = if source.target.is_some() {
-                            pipeline.run_dim(source, file).await?
-                        } else {
-                            pipeline.run(source, file).await?
-                        };
+                        let count = pipeline.run(source, file).await?;
+                        if count > 0 {
+                            println!("{}: {} rows inserted from {}", source.name, count, file);
+                        }
+                    }
+                }
+            }
+        }
+
+        Command::ReloadDims => {
+            let sources = &cfg.dims.sources;
+            if sources.is_empty() {
+                info!("no dim sources configured, nothing to do");
+                return Ok(());
+            }
+            let pipeline = pipeline::IngestPipeline::new(&pool);
+            for source in sources {
+                for file in &source.files {
+                    if pipeline.dim_already_ingested(&source.name, file).await? {
+                        info!(source = source.name, file, "skipping (already ingested)");
+                        continue;
+                    }
+                    let count = pipeline.run_dim(source, file).await?;
+                    if count > 0 {
+                        println!("{}: {} rows inserted from {}", source.name, count, file);
+                    }
+                }
+            }
+        }
+
+        Command::RunDim { source: source_name, file } => {
+            let source = cfg
+                .dims
+                .sources
+                .iter()
+                .find(|s| s.name == source_name)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "source '{}' not found in config/dims.yml",
+                    source_name
+                ))?;
+            let pipeline = pipeline::IngestPipeline::new(&pool);
+            match file {
+                Some(path) => {
+                    let count = pipeline.run_dim(source, &path).await?;
+                    println!("inserted {count} rows");
+                }
+                None => {
+                    if source.files.is_empty() {
+                        info!(source = source_name, "source has no files configured, nothing to do");
+                        return Ok(());
+                    }
+                    for file in &source.files {
+                        if pipeline.dim_already_ingested(&source.name, file).await? {
+                            info!(source = source_name, file, "skipping (already ingested)");
+                            continue;
+                        }
+                        let count = pipeline.run_dim(source, file).await?;
                         if count > 0 {
                             println!("{}: {} rows inserted from {}", source.name, count, file);
                         }
@@ -127,46 +166,4 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use state_search_core::config::{DimTarget, SourceConfig};
-    use std::collections::HashMap;
-
-    fn dim_source() -> SourceConfig {
-        SourceConfig {
-            name: "locs".to_string(),
-            description: None,
-            files: vec![],
-            fields: HashMap::new(),
-            derived: HashMap::new(),
-            target: Some(DimTarget::DimLocation),
-            unique_key: vec![],
-            exclude_columns: vec![],
-        }
-    }
-
-    fn fact_source() -> SourceConfig {
-        SourceConfig {
-            name: "facts".to_string(),
-            description: None,
-            files: vec![],
-            fields: HashMap::new(),
-            derived: HashMap::new(),
-            target: None,
-            unique_key: vec![],
-            exclude_columns: vec![],
-        }
-    }
-
-    #[test]
-    fn dim_source_has_target() {
-        assert!(dim_source().target.is_some());
-    }
-
-    #[test]
-    fn fact_source_has_no_target() {
-        assert!(fact_source().target.is_none());
-    }
 }
