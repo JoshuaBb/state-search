@@ -5,17 +5,15 @@ pub fn apply_chain(
     value: FieldValue,
     chain: &[(Box<dyn FieldRule>, OnFailure)],
 ) -> Result<FieldValue, OnFailure> {
-    let mut current = value;
-    for (rule, effective_on_failure) in chain {
+    chain.iter().try_fold(value, |current, (rule, on_failure)| {
         match rule.apply(current) {
-            RuleOutcome::Value(v) => current = v,
-            RuleOutcome::Fail => match effective_on_failure {
-                OnFailure::Ignore => current = FieldValue::Null,
-                _                 => return Err(*effective_on_failure),
+            RuleOutcome::Value(v) => Ok(v),
+            RuleOutcome::Fail => match on_failure {
+                OnFailure::Ignore => Ok(FieldValue::Null),
+                _                 => Err(*on_failure),
             },
         }
-    }
-    Ok(current)
+    })
 }
 
 #[cfg(test)]
