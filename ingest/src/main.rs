@@ -23,6 +23,8 @@ enum Command {
     Run {
         #[arg(long)]
         source: String,
+        /// Specific file to ingest (bypasses skip check). If omitted, ingests all
+        /// configured files for the source, skipping already-processed ones.
         #[arg(long)]
         file: Option<String>,
     },
@@ -33,6 +35,8 @@ enum Command {
     RunDim {
         #[arg(long)]
         source: String,
+        /// Specific file to ingest (bypasses skip check). If omitted, ingests all
+        /// configured files for the source, skipping already-processed ones.
         #[arg(long)]
         file: Option<String>,
     },
