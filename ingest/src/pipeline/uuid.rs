@@ -41,7 +41,8 @@ fn field_value_to_key_str(v: &FieldValue) -> String {
         FieldValue::U64(x)      => x.to_string(),
         FieldValue::F32(f)      => f.to_bits().to_string(),
         FieldValue::F64(f)      => f.to_bits().to_string(),
-        FieldValue::Date(d)     => d.to_string(),
+        FieldValue::Json(v)      => v.to_string(),
+        FieldValue::Date(d)      => d.to_string(),
         FieldValue::DateTime(dt) => dt.to_rfc3339(),
     }
 }

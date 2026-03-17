@@ -3,9 +3,9 @@ use state_search_core::config::{FieldDef, OnFailure, SourceConfig};
 use super::{FieldRule, coerce::{
     CoerceToBool, CoerceToDate, CoerceToDateTime, CoerceToF32, CoerceToF64,
     CoerceToI8, CoerceToI16, CoerceToI32, CoerceToI64,
-    CoerceToU8, CoerceToU16, CoerceToU32, CoerceToU64,
+    CoerceToJson, CoerceToU8, CoerceToU16, CoerceToU32, CoerceToU64,
     DateFormat, DateTimeFormat,
-}, rules::state_name_to_code::StateNameToCode};
+}, rules::{state_name_to_code::StateNameToCode, str_to_bool::StrToBool}};
 
 pub struct ResolvedField {
     pub source_col: String,
@@ -57,6 +57,7 @@ fn field_type_str_to_coerce(
         "float8"   | "double precision"       => Some(Box::new(CoerceToF64)),
         "numeric"  | "decimal"                => Some(Box::new(CoerceToF64)),
         "boolean"  | "bool"                   => Some(Box::new(CoerceToBool)),
+        "jsonb"    | "json"                   => Some(Box::new(CoerceToJson)),
         "date"                                => Some(Box::new(CoerceToDate(DateFormat::Iso8601))),
         "timestamptz" | "timestamp with time zone" => Some(Box::new(CoerceToDateTime(DateTimeFormat::Rfc3339))),
         // Legacy short names kept for compatibility
@@ -78,6 +79,7 @@ fn field_type_str_to_coerce(
 fn lookup_rule(kind: &str) -> Option<Box<dyn FieldRule>> {
     match kind {
         "state_name_to_code" => Some(Box::new(StateNameToCode)),
+        "str_to_bool"        => Some(Box::new(StrToBool)),
         _                    => None,
     }
 }

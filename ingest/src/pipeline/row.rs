@@ -44,6 +44,7 @@ pub(super) fn canonical_to_json(map: &HashMap<String, FieldValue>) -> serde_json
                 FieldValue::F32(x)      => serde_json::json!(*x),
                 FieldValue::F64(x)      => serde_json::json!(*x),
                 FieldValue::Bool(x)     => serde_json::json!(*x),
+                FieldValue::Json(x)     => x.clone(),
                 FieldValue::Date(x)     => serde_json::Value::String(x.to_string()),
                 FieldValue::DateTime(x) => serde_json::Value::String(x.to_rfc3339()),
             };
@@ -105,7 +106,7 @@ pub(super) fn strip_excluded_columns(
 
 pub(super) fn infer_country_from_path(file_path: &str) -> Option<String> {
     if file_path.to_lowercase().split('/').any(|seg| seg == "usa") {
-        Some("USA".to_string())
+        Some("US".to_string())
     } else {
         None
     }
@@ -181,7 +182,7 @@ mod tests {
     fn infer_country_still_works_after_refactor() {
         assert_eq!(
             infer_country_from_path("data/usa/co/file.csv"),
-            Some("USA".to_string())
+            Some("US".to_string())
         );
         assert_eq!(infer_country_from_path("data/co/file.csv"), None);
     }

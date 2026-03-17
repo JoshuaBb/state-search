@@ -62,6 +62,29 @@ See **[docs/getting-started.md](docs/getting-started.md)** for a step-by-step wa
 
 ---
 
+## Database (psql)
+
+Connect to the running Postgres instance:
+
+```bash
+# Via Docker (no local psql required)
+docker-compose exec db psql -U postgres state_search
+
+# Local psql (if Postgres is running locally)
+psql postgres://postgres:postgres@localhost:5432/state_search
+```
+
+Useful psql commands once connected:
+
+```sql
+\dt                  -- list all tables
+\d <table>           -- describe a table's columns
+\x                   -- toggle expanded output
+\q                   -- quit
+```
+
+---
+
 ## Configuration
 
 Edit `config/default.toml` for database URL and server port, and `config/sources.toml` for data sources. Both can be overridden with `APP__*` environment variables.

@@ -2,4 +2,55 @@
 # Dimension table ingestion sources.
 # Same YAML contract as sources.yml; 'target' is required for every entry.
 # Run with: cargo run -p state-search-ingest -- reload-dims
-sources: []
+sources:
+  - name: locations
+    target: dim_location
+    description: US location dimension (by zip, city, county, and state)
+    unique_key:
+      - country
+      - state_code
+      - fips_code
+      - city
+      - zip_code
+    files:
+      - data/dim/locations_by_zip.csv
+      - data/dim/locations_by_city.csv
+      - data/dim/locations_by_county.csv
+      - data/dim/locations_by_state.csv
+    fields:
+      country:
+        canonical: country
+        type: text
+      state_code:
+        canonical: state_code
+        type: text
+      state_name:
+        canonical: state_name
+        type: text
+      fips_code:
+        canonical: fips_code
+        type: text
+      county:
+        canonical: county
+        type: text
+      city:
+        canonical: city
+        type: text
+      zip_code:
+        canonical: zip_code
+        type: text
+      latitude:
+        canonical: latitude
+        type: float8
+      longitude:
+        canonical: longitude
+        type: float8
+      population:
+        canonical: population
+        type: float8
+      density:
+        canonical: density
+        type: float8
+      timezone:
+        canonical: timezone
+        type: text

@@ -16,6 +16,7 @@ pub enum FieldValue {
     U8(u8),   U16(u16),  U32(u32),  U64(u64),
     F32(f32), F64(f64),
     Bool(bool),
+    Json(serde_json::Value),
     Date(chrono::NaiveDate),
     DateTime(chrono::DateTime<chrono::Utc>),
 }

@@ -156,12 +156,25 @@ async fn run_dim_location(
 
             let loc = NewLocation {
                 id,
-                county:    field_as_str(&transformed, "county"),
-                country:   field_as_str(&transformed, "country"),
-                zip_code:  field_as_str(&transformed, "zip_code"),
-                fips_code: field_as_str(&transformed, "fips_code"),
-                latitude:  field_as_f64(&transformed, "latitude"),
-                longitude: field_as_f64(&transformed, "longitude"),
+                county:           field_as_str(&transformed, "county"),
+                country:          field_as_str(&transformed, "country"),
+                zip_code:         field_as_str(&transformed, "zip_code"),
+                fips_code:        field_as_str(&transformed, "fips_code"),
+                latitude:         field_as_f64(&transformed, "latitude"),
+                longitude:        field_as_f64(&transformed, "longitude"),
+                city:             field_as_str(&transformed, "city"),
+                state_code:       field_as_str(&transformed, "state_code"),
+                state_name:       field_as_str(&transformed, "state_name"),
+                zcta:             field_as_str(&transformed, "zcta"),
+                parent_zcta:      field_as_str(&transformed, "parent_zcta"),
+                population:       field_as_f64(&transformed, "population"),
+                density:          field_as_f64(&transformed, "density"),
+                county_weights:   field_as_json(&transformed, "county_weights"),
+                county_names_all: field_as_str(&transformed, "county_names_all"),
+                county_fips_all:  field_as_str(&transformed, "county_fips_all"),
+                imprecise:        field_as_bool(&transformed, "imprecise"),
+                military:         field_as_bool(&transformed, "military"),
+                timezone:         field_as_str(&transformed, "timezone"),
             };
             Ok::<Vec<NewLocation>, anyhow::Error>(vec![loc])
         }
@@ -297,6 +310,29 @@ fn field_as_str(map: &std::collections::HashMap<String, FieldValue>, key: &str) 
 
 fn field_as_f64(map: &std::collections::HashMap<String, FieldValue>, key: &str) -> Option<f64> {
     super::row::f64_from_field(map, key)
+}
+
+fn field_as_bool(map: &std::collections::HashMap<String, FieldValue>, key: &str) -> Option<bool> {
+    match map.get(key)? {
+        FieldValue::Bool(b) => Some(*b),
+        FieldValue::Str(s) => match s.to_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn field_as_json(
+    map: &std::collections::HashMap<String, FieldValue>,
+    key: &str,
+) -> Option<serde_json::Value> {
+    match map.get(key)? {
+        FieldValue::Json(v)                  => Some(v.clone()),
+        FieldValue::Str(s) if !s.is_empty()  => serde_json::from_str(s).ok(),
+        _ => None,
+    }
 }
 
 fn target_str(t: DimTarget) -> &'static str {

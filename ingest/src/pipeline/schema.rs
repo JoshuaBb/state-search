@@ -147,6 +147,7 @@ fn field_value_to_json(
         FieldValue::U64(x)    => serde_json::json!(*x),
         FieldValue::F32(x)    => serde_json::json!(*x),
         FieldValue::F64(x)    => serde_json::json!(*x),
+        FieldValue::Json(v)   => v.clone(),
         FieldValue::Date(d)   => serde_json::Value::String(d.to_string()),
         FieldValue::DateTime(dt) => serde_json::Value::String(dt.to_rfc3339()),
     };

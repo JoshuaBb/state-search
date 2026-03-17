@@ -20,7 +20,7 @@ pub(super) fn new_location_cache() -> LocationCache {
 }
 
 // Hardcoded internal unique-key columns for fact-path dim upserts (alphabetical for stable sort)
-const LOC_KEY_COLS: &[&str] = &["county", "country", "fips_code", "latitude", "longitude", "zip_code"];
+const LOC_KEY_COLS: &[&str] = &["city", "country", "fips_code", "state_code", "zip_code"];
 const TIME_KEY_COLS: &[&str] = &["day", "month", "quarter", "year"];
 
 // ── Location ──────────────────────────────────────────────────────────────────
@@ -65,14 +65,27 @@ fn resolve_location(
     }
 
     let loc = NewLocation {
-        id:        derive_uuid(LOC_KEY_COLS, &tmp),
-        county:    str_from_field(map, "county"),
-        country:   str_from_field(map, "country")
-                       .or_else(|| default_country.map(str::to_string)),
-        zip_code:  str_from_field(map, "zip_code"),
-        fips_code: str_from_field(map, "fips_code"),
-        latitude:  f64_from_field(map, "latitude"),
-        longitude: f64_from_field(map, "longitude"),
+        id:               derive_uuid(LOC_KEY_COLS, &tmp),
+        county:           str_from_field(map, "county"),
+        country:          str_from_field(map, "country")
+                              .or_else(|| default_country.map(str::to_string)),
+        zip_code:         str_from_field(map, "zip_code"),
+        fips_code:        str_from_field(map, "fips_code"),
+        latitude:         f64_from_field(map, "latitude"),
+        longitude:        f64_from_field(map, "longitude"),
+        city:             str_from_field(map, "city"),
+        state_code:       str_from_field(map, "state_code"),
+        state_name:       str_from_field(map, "state_name"),
+        zcta:             None,
+        parent_zcta:      None,
+        population:       None,
+        density:          None,
+        county_weights:   None,
+        county_names_all: None,
+        county_fips_all:  None,
+        imprecise:        None,
+        military:         None,
+        timezone:         str_from_field(map, "timezone"),
     };
     if loc.is_empty() { Err(()) } else { Ok(loc) }
 }

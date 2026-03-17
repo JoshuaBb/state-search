@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use super::{private, FieldRule, FieldValue, RuleOutcome};
+use serde_json;
 
 // ── Date / DateTime format enums ─────────────────────────────────────────────
 
@@ -128,6 +129,25 @@ impl FieldRule for CoerceToBool {
                 "true"  | "1" | "yes" => RuleOutcome::Value(FieldValue::Bool(true)),
                 "false" | "0" | "no"  => RuleOutcome::Value(FieldValue::Bool(false)),
                 _                     => RuleOutcome::Fail,
+            },
+            _ => RuleOutcome::Fail,
+        }
+    }
+}
+
+// ── JSON coerce rule ──────────────────────────────────────────────────────────
+
+/// Parses a JSON string into a `FieldValue::Json`. Passes `Null` through.
+/// Fails if the string is not valid JSON.
+pub struct CoerceToJson;
+impl private::Sealed for CoerceToJson {}
+impl FieldRule for CoerceToJson {
+    fn apply(&self, value: FieldValue) -> RuleOutcome {
+        match value {
+            FieldValue::Null   => RuleOutcome::Value(FieldValue::Null),
+            FieldValue::Str(s) => match serde_json::from_str(&s) {
+                Ok(v)  => RuleOutcome::Value(FieldValue::Json(v)),
+                Err(_) => RuleOutcome::Fail,
             },
             _ => RuleOutcome::Fail,
         }
@@ -270,6 +290,30 @@ mod tests {
     fn coerce_non_str_non_null_fails() {
         let result = run(CoerceToI32, FieldValue::Bool(true));
         assert_eq!(result.unwrap_err(), OnFailure::SkipRow);
+    }
+
+    #[test]
+    fn coerce_json_valid_object() {
+        let result = run(CoerceToJson, FieldValue::Str(r#"{"a":1}"#.into())).unwrap();
+        assert!(matches!(result, FieldValue::Json(_)));
+    }
+
+    #[test]
+    fn coerce_json_valid_array() {
+        let result = run(CoerceToJson, FieldValue::Str("[1,2,3]".into())).unwrap();
+        assert!(matches!(result, FieldValue::Json(_)));
+    }
+
+    #[test]
+    fn coerce_json_invalid_fails() {
+        let result = run(CoerceToJson, FieldValue::Str("not json".into()));
+        assert_eq!(result.unwrap_err(), OnFailure::SkipRow);
+    }
+
+    #[test]
+    fn null_passes_through_json() {
+        let result = run(CoerceToJson, FieldValue::Null).unwrap();
+        assert!(matches!(result, FieldValue::Null));
     }
 
     #[test]

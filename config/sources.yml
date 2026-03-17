@@ -17,6 +17,9 @@ sources:
         rules:
           - kind: state_name_to_code
             on_failure: skip_dataset
+      county:
+        canonical: county
+        type: text
       county_fips:
         canonical: fips_code
         type: text
@@ -26,12 +29,6 @@ sources:
       quarter:
         canonical: quarter
         type: smallint
-      pws_latitude:
-        canonical: latitude
-        type: float8
-      pws_longitude:
-        canonical: longitude
-        type: float8
       analyte_name:
         canonical: analyte_name
         type: text
