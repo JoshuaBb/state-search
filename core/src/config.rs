@@ -318,6 +318,9 @@ fields:
             "name: no_target\nfields: {}\nderived: {}\n"
         ).unwrap();
         let err = validate_dim_sources(&[sc]).unwrap_err();
-        assert!(err.to_string().contains("no_target"), "error was: {err}");
+        assert!(
+            err.to_string().contains("dims.yml entry 'no_target' is missing required 'target' field"),
+            "error was: {err}"
+        );
     }
 }
