@@ -1,0 +1,5 @@
+# config/dims.yml
+# Dimension table ingestion sources.
+# Same YAML contract as sources.yml; 'target' is required for every entry.
+# Run with: cargo run -p state-search-ingest -- reload-dims
+sources: []
