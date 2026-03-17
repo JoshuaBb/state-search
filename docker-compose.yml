@@ -14,25 +14,11 @@ services:
       timeout: 5s
       retries: 10
 
-  api:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
-      APP__SERVER__HOST:  0.0.0.0
-      APP__SERVER__PORT:  "3000"
-    depends_on:
-      db:
-        condition: service_healthy
-      ingest:
-        condition: service_completed_successfully
-
-  ingest:
-    build: .
-    entrypoint: ["/app/ingest"]
-    command: ["reload"]
+  ingest-dims:
+    build:
+      context: .
+      target: ingest
+    command: ["reload-dims"]
     environment:
       APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
     depends_on:
@@ -41,5 +27,35 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+
+  ingest:
+    build:
+      context: .
+      target: ingest
+    command: ["reload"]
+    environment:
+      APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
+    depends_on:
+      db:
+        condition: service_healthy
+      ingest-dims:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
       - ./exports:/app/exports
 
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
+    depends_on:
+      db:
+        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
