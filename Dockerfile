@@ -48,8 +48,8 @@ COPY config/ config/
 
 RUN cargo build --release --bin api --bin ingest
 
-# ── Stage 4: Minimal runtime image ───────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+# ── Stage 4a: API runtime ─────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS api
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -57,14 +57,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=rust-builder /app/target/release/api    /app/api
-COPY --from=rust-builder /app/target/release/ingest /app/ingest
-COPY --from=web-builder  /app/web/dist              /app/web/dist
-COPY config/                                         /app/config/
+COPY --from=rust-builder /app/target/release/api /app/api
+COPY --from=web-builder  /app/web/dist           /app/web/dist
+COPY config/                                      /app/config/
 
-ENV APP_SERVER__HOST=0.0.0.0
-ENV APP_SERVER__PORT=3000
+ENV APP__SERVER__HOST=0.0.0.0
+ENV APP__SERVER__PORT=3000
 
 EXPOSE 3000
 
 CMD ["/app/api"]
+
+# ── Stage 4b: Ingest runtime ──────────────────────────────────────────────────
+FROM debian:bookworm-slim AS ingest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=rust-builder /app/target/release/ingest /app/ingest
+COPY config/                                         /app/config/
+
+ENTRYPOINT ["/app/ingest"]
