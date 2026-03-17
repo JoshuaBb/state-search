@@ -10,10 +10,12 @@ DROP INDEX IF EXISTS dim_location_uq;   -- was (county, country, zip_code)
 DROP INDEX IF EXISTS dim_time_uq;       -- was (year, quarter, month, day)
 
 -- Step 3: migrate dim_location PK bigint → uuid
+ALTER TABLE dim_location ALTER COLUMN id DROP DEFAULT;
 ALTER TABLE dim_location ALTER COLUMN id TYPE uuid USING gen_random_uuid();
 ALTER TABLE dim_location ALTER COLUMN id SET DEFAULT gen_random_uuid();
 
 -- Step 4: migrate dim_time PK bigint → uuid
+ALTER TABLE dim_time ALTER COLUMN id DROP DEFAULT;
 ALTER TABLE dim_time ALTER COLUMN id TYPE uuid USING gen_random_uuid();
 ALTER TABLE dim_time ALTER COLUMN id SET DEFAULT gen_random_uuid();
 
@@ -32,6 +34,7 @@ ALTER TABLE normalized_imports
     FOREIGN KEY (time_id) REFERENCES dim_time(id);
 
 -- Step 7: migrate normalized_imports PK bigint → uuid (after FKs are re-established)
+ALTER TABLE normalized_imports ALTER COLUMN id DROP DEFAULT;
 ALTER TABLE normalized_imports ALTER COLUMN id TYPE uuid USING gen_random_uuid();
 ALTER TABLE normalized_imports ALTER COLUMN id SET DEFAULT gen_random_uuid();
 
