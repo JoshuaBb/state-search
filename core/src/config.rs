@@ -8,9 +8,11 @@ use crate::error::Result;
 pub struct AppConfig {
     pub database: DatabaseConfig,
     #[serde(default)]
-    pub server: ServerConfig,
+    pub server:   ServerConfig,
     #[serde(default)]
-    pub ingest: IngestConfig,
+    pub ingest:   IngestConfig,
+    #[serde(default)]
+    pub dims:     DimIngestConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -44,6 +46,26 @@ impl ServerConfig {
 pub struct IngestConfig {
     #[serde(default)]
     pub sources: Vec<SourceConfig>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct DimIngestConfig {
+    #[serde(default)]
+    pub sources: Vec<SourceConfig>,
+}
+
+pub(crate) fn validate_dim_sources(
+    sources: &[SourceConfig],
+) -> std::result::Result<(), config::ConfigError> {
+    for source in sources {
+        if source.target.is_none() {
+            return Err(config::ConfigError::Message(format!(
+                "dims.yml entry '{}' is missing required 'target' field",
+                source.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +173,20 @@ impl AppConfig {
                 config::ConfigError::Message(format!("failed to parse {sources_path}: {e}"))
             })?;
             app_config.ingest.sources = sources.sources;
+        }
+
+        let dims_path = "config/dims.yml";
+        if let Ok(content) = std::fs::read_to_string(dims_path) {
+            #[derive(Deserialize)]
+            struct DimsFile {
+                #[serde(default)]
+                sources: Vec<SourceConfig>,
+            }
+            let dims: DimsFile = serde_yaml::from_str(&content).map_err(|e| {
+                config::ConfigError::Message(format!("failed to parse {dims_path}: {e}"))
+            })?;
+            validate_dim_sources(&dims.sources)?;
+            app_config.dims.sources = dims.sources;
         }
 
         Ok(app_config)
@@ -261,5 +297,27 @@ fields:
         let src = "name: time_src\ntarget: dim_time\nfields: {}\nderived: {}\n";
         let sc: SourceConfig = serde_yaml::from_str(src).unwrap();
         assert_eq!(sc.target, Some(DimTarget::DimTime));
+    }
+
+    #[test]
+    fn validate_dim_sources_passes_when_all_have_target() {
+        let sc: SourceConfig = serde_yaml::from_str(
+            "name: locs\ntarget: dim_location\nfields: {}\nderived: {}\n"
+        ).unwrap();
+        assert!(validate_dim_sources(&[sc]).is_ok());
+    }
+
+    #[test]
+    fn validate_dim_sources_passes_for_empty_slice() {
+        assert!(validate_dim_sources(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_dim_sources_fails_when_target_missing() {
+        let sc: SourceConfig = serde_yaml::from_str(
+            "name: no_target\nfields: {}\nderived: {}\n"
+        ).unwrap();
+        let err = validate_dim_sources(&[sc]).unwrap_err();
+        assert!(err.to_string().contains("no_target"), "error was: {err}");
     }
 }
