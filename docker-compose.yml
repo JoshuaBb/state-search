@@ -54,6 +54,8 @@ services:
       - "3000:3000"
     environment:
       APP__DATABASE__URL: postgres://postgres:postgres@db:5432/state_search
+      APP__SERVER__HOST:  0.0.0.0
+      APP__SERVER__PORT:  "3000"
     depends_on:
       db:
         condition: service_healthy
